@@ -148,6 +148,24 @@ def override_header(t):
                    "headers": {"X-HTTP-Method-Override": "POST"}}}
 
 
+def lookback_edit(old, new):
+    def edit(t):
+        actions = first_workflow(t)["properties"]["definition"]["actions"]
+        text = actions["Determine_Lookback"]["inputs"]
+        assert old in text, old
+        actions["Determine_Lookback"]["inputs"] = text.replace(old, new, 1)
+    return with_template(ROOT, edit)
+
+
+def drop_user_agent(t):
+    actions = first_workflow(t)["properties"]["definition"]["actions"]
+    del actions["Pagination_Loop"]["actions"]["Get_SOCRadar_Page"]["inputs"]["headers"]["User-Agent"]
+
+
+def rescan_parameter(t):
+    t["parameters"]["RescanDays"] = {"type": "int", "defaultValue": 5}
+
+
 def ioc_dir(root):
     os.makedirs(os.path.join(root, "Playbooks", "SOCRadar-IOC-Enrichment"))
     with open(os.path.join(root, "Playbooks", "SOCRadar-IOC-Enrichment", "azuredeploy.json"), "w") as fh:
@@ -234,9 +252,19 @@ SUBSET = [
     ("a variable deleted", with_template(ROOT, drop_a_variable)),
     ("a standalone playbook edited by hand", with_template(IMPORT, edit_standalone_playbook)),
 ]
+RESCAN = [
+    ("the once-a-day guard removed (rescan on every run)", lookback_edit("less(ticks(body('Read_Checkpoint')?['LastRunUtc'])", "greaterOrEquals(ticks(body('Read_Checkpoint')?['LastRunUtc'])")),
+    ("the rescan window cut to 12 hours", lookback_edit("7200", "720")),
+    ("the rescan hour moved to 19:00", lookback_edit("'T09:00:00Z'", "'T19:00:00Z'")),
+    ("the rescan before 09:00 instead of after", lookback_edit("and(greaterOrEquals(ticks(utcNow())", "and(less(ticks(utcNow())")),
+    ("the 7-day clamp removed", lookback_edit("10080", "100800")),
+    ("the User-Agent dropped from a SOCRadar call", with_template(ROOT, drop_user_agent)),
+    ("a parameter that exposes the rescan", with_template(ROOT, rescan_parameter)),
+]
 GATES = {
     "writeback": (os.path.join("tests", "test_no_writeback.py"), WRITEBACK),
     "subset": (os.path.join("tools", "check_parent_subset.py"), SUBSET),
+    "rescan": (os.path.join("tests", "test_daily_rescan.py"), RESCAN),
 }
 
 
