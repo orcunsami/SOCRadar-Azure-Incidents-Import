@@ -20,7 +20,6 @@ import tempfile
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = "azuredeploy.json"
 IMPORT = "Playbooks/SOCRadar-Alarm-Import/azuredeploy.json"
-IOC = "Playbooks/SOCRadar-IOC-Enrichment/azuredeploy.json"
 
 WRITE_ACTION = {
     "type": "Http", "runAfter": {},
@@ -80,16 +79,16 @@ def sync_parameter(t):
     t["parameters"]["SyncSeverity"] = {"type": "bool", "defaultValue": True}
 
 
-def ioc_other_endpoint(t):
-    text = json.dumps(t).replace("/api/ioc_enrichment/get/indicator_details", "/api/ioc_enrichment/other")
-    t.clear()
-    t.update(json.loads(text))
-
-
 def ioc_post_in_import(t):
     first_workflow(t)["properties"]["definition"]["actions"]["Zz_Lookup"] = {
         "type": "Http", "runAfter": {},
         "inputs": {"method": "POST", "uri": "https://platform.socradar.com/api/ioc_enrichment/get/indicator_details"}}
+
+
+def ioc_dir(root):
+    os.makedirs(os.path.join(root, "Playbooks", "SOCRadar-IOC-Enrichment"))
+    with open(os.path.join(root, "Playbooks", "SOCRadar-IOC-Enrichment", "azuredeploy.json"), "w") as fh:
+        fh.write('{"resources": []}')
 
 
 def sync_dir(root):
@@ -144,8 +143,8 @@ WRITEBACK = [
     ("a second Logic App in the root template", with_template(ROOT, second_workflow)),
     ("a Sync playbook directory", sync_dir),
     ("a SyncSeverity parameter", with_template(ROOT, sync_parameter)),
-    ("IOC playbook POSTs to a different endpoint", with_template(IOC, ioc_other_endpoint)),
-    ("the lookup POST outside the IOC playbook", with_template(IMPORT, ioc_post_in_import)),
+    ("an IOC-Enrichment playbook directory", ioc_dir),
+    ("a lookup POST in the Import playbook", with_template(IMPORT, ioc_post_in_import)),
     ("a README Deploy button back on the old repo", readme_edit(readme_old_button)),
     ("the README describes a Sync switch", readme_edit(readme_mentions_sync)),
     ("the README loses its Deploy buttons", readme_edit(readme_no_buttons)),

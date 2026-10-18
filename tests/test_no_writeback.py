@@ -8,9 +8,9 @@ ARM validation cannot see it, because it validates JSON shape and never runs an 
 Checked on every template the repo ships:
   - the deployable root template carries exactly one Logic App, the import one;
   - there is no Sync playbook, no Sync parameter and no Synced label anywhere;
-  - every call a workflow makes to platform.socradar.com is a GET. The one optional
-    IOC-Enrichment playbook also POSTs to a read-only lookup endpoint, and that single
-    endpoint is allow-listed there and nowhere else;
+  - every call a workflow makes to platform.socradar.com is a GET, no exception: the
+    optional IOC-Enrichment playbook of the bidirectional repo POSTs to a lookup endpoint,
+    so it is not shipped here either;
   - the README says the same: every Deploy button installs THIS repo (a button left on the
     bidirectional repo would silently deploy the Sync half), and Sync or write-back is
     mentioned only in the section about moving to the bidirectional version.
@@ -27,14 +27,10 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.join(REPO, "azuredeploy.json")
 PLAYBOOKS = sorted(glob.glob(os.path.join(REPO, "Playbooks", "*", "azuredeploy.json")))
-IOC_PLAYBOOK = os.path.join(REPO, "Playbooks", "SOCRadar-IOC-Enrichment", "azuredeploy.json")
-
-# A POST that only looks something up. Allowed in the IOC-Enrichment playbook and nowhere else.
-READ_ONLY_POSTS = {(IOC_PLAYBOOK, "/api/ioc_enrichment/get/indicator_details")}
 
 # Gone for good: the write-back endpoints and everything named after Sync.
 FORBIDDEN = ["SyncSeverity", "SyncPlaybookName", "SOCRadar-Alarm-Sync", "Update_SOCRadar",
-             "alarms/status/change", "alarm/severity", "Synced"]
+             "alarms/status/change", "alarm/severity", "Synced", "ioc_enrichment"]
 
 failures = []
 
@@ -86,9 +82,10 @@ if len(found) != 1:
 elif "ImportPlaybookName" not in json.dumps(found[0].get("name")):
     failures.append(f"{rel(ROOT)}: the one Logic App is not the import playbook")
 
-# 2. No Sync playbook directory.
-if os.path.isdir(os.path.join(REPO, "Playbooks", "SOCRadar-Alarm-Sync")):
-    failures.append("Playbooks/SOCRadar-Alarm-Sync exists")
+# 2. Neither the Sync playbook nor the IOC-Enrichment playbook is shipped.
+for name in ("SOCRadar-Alarm-Sync", "SOCRadar-IOC-Enrichment"):
+    if os.path.isdir(os.path.join(REPO, "Playbooks", name)):
+        failures.append(f"Playbooks/{name} exists")
 
 # 3. No write-back strings in any template.
 for path in [ROOT] + PLAYBOOKS:
@@ -97,14 +94,12 @@ for path in [ROOT] + PLAYBOOKS:
         if token in text:
             failures.append(f"{rel(path)}: contains {token!r}")
 
-# 4. Every call to SOCRadar is a GET, bar the allow-listed read-only lookup.
+# 4. Every call to SOCRadar is a GET.
 seen_get = 0
 for path in [ROOT] + PLAYBOOKS:
     for action, method, uri in socradar_calls(load(path)):
         if method == "GET":
             seen_get += 1
-        elif (path, uri) in READ_ONLY_POSTS and method == "POST":
-            continue
         else:
             failures.append(f"{rel(path)}: {action} sends {method} {uri} to SOCRadar")
 

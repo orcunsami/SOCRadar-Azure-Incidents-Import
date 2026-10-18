@@ -63,10 +63,6 @@ ALLOWED = {
         ('changed', "resources > [Microsoft.OperationalInsights/workspaces/tables|[concat(parameters('WorkspaceName'), '/SOCRadarAuditLog_CL')]] > properties > schema > columns > [string|EventType] > description",
          'AlarmSynced is not an audit event type any more'),
     ],
-    'Playbooks/SOCRadar-IOC-Enrichment/azuredeploy.json': [
-        ('changed', 'parameters > SocradarApiKey > metadata > description',
-         'the key is no longer shared with a Sync Logic App'),
-    ],
     'Playbooks/SOCRadar-Workbook/azuredeploy.json': [
         ('changed', "resources > [Microsoft.Insights/workbooks|[guid(resourceGroup().id, variables('WorkbookName'))]] > properties > serializedData",
          'the dashboard header no longer mentions sync status'),

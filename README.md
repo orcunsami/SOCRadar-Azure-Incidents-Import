@@ -24,36 +24,6 @@ flowchart LR
 
 Alarms and audit events are also written to custom Log Analytics tables. Hunting queries, analytic rules, and the workbook read from them. All three (audit, alarms table, workbook) are toggleable at deploy time.
 
-### IOC Enrichment (optional add-on)
-
-Deployed separately from the main template. When an incident is created, this playbook looks up each related entity (IP, domain, URL, file hash) in **SOCRadar IOC Enrichment** and posts a comment with the risk score, signal strength, categorization, and threat actors.
-
-```mermaid
-flowchart LR
-    A["Microsoft Sentinel<br/>Incident"] --> B["SOCRadar-IOC-Enrichment<br/>Logic App"]
-    B --> C["SOCRadar IOC Enrichment<br/>indicator_details API"]
-    C --> D["Incident Comment<br/>risk score + context"]
-```
-
-Deploy `Playbooks/SOCRadar-IOC-Enrichment/azuredeploy.json` on its own:
-
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Forcunsami%2FSOCRadar-Azure-Incidents-Import%2Fmaster%2FPlaybooks%2FSOCRadar-IOC-Enrichment%2Fazuredeploy.json)
-
-Notes:
-
-- `SocradarApiKey` is your normal company key (same one used by SOCRadar-Alarm-Import), used here to fetch the original alarm's related entities. IOC enrichment itself needs a **separate** key with the **IOC Enrichment** entitlement (Standard Licensed APIs / advanced tier -- contact integration@socradar.io). Set `SocradarIocApiKey` to that key; leave it empty to reuse `SocradarApiKey` for enrichment too. If the key used for enrichment lacks the entitlement, calls return HTTP 402 and nothing is enriched; the playbook then posts a single summary comment that lists the indicators under "Not enriched". It does not name the cause, so look for HTTP 402 in the run history.
-- `MaxIndicators` (default `20`) caps how many indicators one incident enriches. Each enrichment spends one SOCRadar API credit, and an alarm incident can carry 100 entities, so raise it only if your credit budget allows.
-- `RiskScoreThreshold` (default `0`) -- only comments when the score is at or above this value. Benign whitelisted indicators scoring 0 are skipped.
-- Indicators that are still being looked up (HTTP 202) or that failed are collected into one summary comment instead of one comment each.
-- Microsoft Sentinel needs permission on this resource group before it can run the playbook. Either pass `SentinelServicePrincipalObjectId` at deploy time, or afterwards open **Microsoft Sentinel > Settings > Playbook permissions > Configure permissions** and add this resource group. Without it, running the playbook fails with `Missing required permissions for Microsoft Sentinel on the playbook resource`.
-
-  ```bash
-  az ad sp list --filter "appId eq '98785600-1bb7-4fb9-b9fa-19afe2c8a360'" --query "[0].id" -o tsv
-  ```
-
-- After deployment, create a Microsoft Sentinel **automation rule** (when an incident is created -> run this playbook) in the portal.
-- Microsoft Sentinel **Responder** role is sufficient for the playbook itself.
-
 ## Prerequisites
 
 - Microsoft Sentinel workspace -- `WorkspaceName` is either an existing workspace or a new
@@ -199,7 +169,8 @@ that from re-importing anything.
 ## Moving to the bidirectional version
 
 The version that also writes closures back to SOCRadar is
-[SOCRadar-Azure-Incidents](https://github.com/orcunsami/SOCRadar-Azure-Incidents). Three things to
+[SOCRadar-Azure-Incidents](https://github.com/orcunsami/SOCRadar-Azure-Incidents). The optional
+IOC-Enrichment playbook, which looks indicators up in SOCRadar, lives there too. Three things to
 know before you put it next to this one:
 
 - It adds a second Logic App, `SOCRadar-Alarm-Sync`. This repo never deploys it and never removes
@@ -242,9 +213,6 @@ under **Run history**: a run that was already in progress finishes with the old 
 means the key does not belong to this company, 402 means no credit, an inactive key or an invalid
 key. The key is not written to the run history: every action that sends it has its inputs hidden.
 Nothing runs while the Logic App is **Disabled**.
-
-If you installed the IoC Enrichment playbook, it has its own `SocradarApiKey` (and an optional
-`SocradarIocApiKey`); change them the same way.
 
 ### Azure CLI
 
