@@ -23,8 +23,8 @@ jobs:
           done
           echo "checked $count template(s)"
           # Guard against a silent pass when the glob matches nothing.
-          if [ "$count" -lt 7 ]; then
-            echo "expected at least 7 templates, found $count"
+          if [ "$count" -lt 6 ]; then
+            echo "expected at least 6 templates, found $count"
             exit 1
           fi
 
@@ -40,8 +40,8 @@ jobs:
           done
           echo "checked $count analytic rule(s)"
           # Guard against a silent pass when the glob matches nothing.
-          if [ "$count" -lt 3 ]; then
-            echo "expected at least 3 analytic rules, found $count"
+          if [ "$count" -lt 2 ]; then
+            echo "expected at least 2 analytic rules, found $count"
             exit 1
           fi
 
@@ -54,8 +54,11 @@ jobs:
       - name: Analytic rules match the shipped schema and ATT&CK mapping
         run: python3 tools/check_analytic_rules.py
 
-      - name: Severity write-back stays gated and can only raise a severity
-        run: python3 tests/test_severity_sync_logic.py
+      - name: Nothing is written back to SOCRadar
+        run: python3 tests/test_no_writeback.py
+
+      - name: Templates are the parent's templates minus the Sync half
+        run: python3 tools/check_parent_subset.py
 
       - name: ARM host comes from environment(), never a literal
         run: python3 tests/test_management_base_url.py
@@ -81,11 +84,8 @@ jobs:
       - name: Domain entities use a real TLD whitelist, not a two-letter catch-all
         run: python3 tests/test_domain_tld_whitelist.py
 
-      - name: Alert-backed mode, rule limits and Sync entity reader
+      - name: Alert-backed mode, rule limits and the import cap
         run: python3 tests/test_alert_backed_mode.py
-
-      - name: Sync reaches back a day and a failed page fails the run
-        run: python3 tests/test_sync_window.py
 
       - name: Shipped queries do what the README says
         run: python3 tests/test_query_logic.py

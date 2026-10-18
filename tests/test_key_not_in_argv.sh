@@ -13,7 +13,7 @@ cat > "$T/bin/az" <<'FAKE'
 printf '%s\n' "az $*" >> "$T/argv.log"
 if [ "$1 $2 $3" = "deployment group create" ]; then
     for a in "$@"; do case "$a" in @*) f="${a#@}"
-        echo "PERM=$(stat -c %a "$f") HASKEY=$(grep -c "$CANARY" "$f") FILE=$f" >> "$T/meta.log";; esac; done
+        echo "PERM=$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f") HASKEY=$(grep -c "$CANARY" "$f") FILE=$f" >> "$T/meta.log";; esac; done
 fi
 exit 0
 FAKE

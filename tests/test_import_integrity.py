@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Pin the four silent-loss guards added in task_azure_0056.
+"""Pin the three silent-loss guards added in task_azure_0056.
 
-An 11-agent pre-delivery audit found four ways this import could lose alarms or create
+An 11-agent pre-delivery audit found ways this import could lose alarms or create
 duplicates while every log line still said the run succeeded. Each is now guarded, and
-each guard is pinned here so a later edit cannot quietly take it away.
+each guard is pinned here so a later edit cannot quietly take it away. (A fourth, S5, was
+the Sync playbook's and is not part of this repo.)
 
   S2  Pagination_Loop_Incidents is an Until with a limit. If it stops on the limit rather
       than an empty nextLink, the existing-incident list is partial and the run re-creates
@@ -14,7 +15,6 @@ each guard is pinned here so a later edit cannot quietly take it away.
   S4  The backfill read the alarm id with last(split(title, '#')), which picks the wrong
       segment as soon as the alarm's own title contains a '#'. The other reader already
       used [1].
-  S5  Sync's status write had no else branch, so a refusal from SOCRadar left no trace.
 
 Run:  python3 tests/test_import_integrity.py
 """
@@ -25,7 +25,6 @@ import os
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.join(REPO, "azuredeploy.json")
 IMPORT = os.path.join(REPO, "Playbooks", "SOCRadar-Alarm-Import", "azuredeploy.json")
-SYNC = os.path.join(REPO, "Playbooks", "SOCRadar-Alarm-Sync", "azuredeploy.json")
 
 failures = []
 checks = 0
@@ -52,12 +51,6 @@ def workflows(path):
 def importers(path):
     for dfn in workflows(path):
         if "Pagination_Loop_Incidents" in dfn.get("actions", {}):
-            yield dfn
-
-
-def syncers(path):
-    for dfn in workflows(path):
-        if "Check_SOCRadar_Write_Succeeded" in json.dumps(dfn):
             yield dfn
 
 
@@ -99,27 +92,6 @@ for path in (ROOT, IMPORT):
         check("For_Each_Missing_Entity')?['properties']?['title'], ''), '#')[1]" in blob,
               f"{rel(path)}: the backfill no longer reads the alarm id from the title")
     check(found, f"{rel(path)}: no import workflow found - the test is looking in the wrong place")
-
-for path in (ROOT, SYNC):
-    found = False
-    for dfn in syncers(path):
-        found = True
-
-        def visit(node):
-            if isinstance(node, dict):
-                for k, v in node.items():
-                    if k == "Check_SOCRadar_Write_Succeeded" and isinstance(v, dict):
-                        yield v
-                    yield from visit(v)
-            elif isinstance(node, list):
-                for v in node:
-                    yield from visit(v)
-
-        for act in visit(dfn):
-            branch = act.get("else") or {}
-            check(bool(branch.get("actions")),
-                  f"{rel(path)}: SOCRadar refusing the status write leaves no trace")
-    check(found, f"{rel(path)}: no sync workflow found - the test is looking in the wrong place")
 
 if failures:
     for f in failures:

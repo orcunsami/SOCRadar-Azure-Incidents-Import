@@ -11,8 +11,8 @@ number, not a preference, and each one is pinned here:
     run and the rule query takes at most 149 rows
   - an event ingested after the rule's window has passed is never alerted -> the query filters
     on ingestion_time(), not TimeGenerated (Microsoft's own ingestion-delay guidance)
-  - Sync has to find the alarm id when the title override was dropped -> the id is on the URL
-    entity, the rule groups by it, and Sync reads it as a third fallback
+  - the alarm id has to stay findable when the title override was dropped -> the id is on the
+    URL entity and the rule groups by it
 
 Run:  python3 tests/test_alert_backed_mode.py
 """
@@ -24,7 +24,6 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.join(REPO, "azuredeploy.json")
 IMPORT = os.path.join(REPO, "Playbooks", "SOCRadar-Alarm-Import", "azuredeploy.json")
-SYNC = os.path.join(REPO, "Playbooks", "SOCRadar-Alarm-Sync", "azuredeploy.json")
 
 LOOP = "For_Each_Alarm_AlertBacked"
 failures = []
@@ -69,8 +68,6 @@ def workflow(template, kind):
         actions = resource["properties"]["definition"]["actions"]
         if kind == "import" and "Pagination_Loop" in actions:
             return resource
-        if kind == "sync" and "For_Each_Incident" in actions:
-            return resource
     return None
 
 
@@ -103,7 +100,6 @@ def nested_rule(template):
 
 root = load(ROOT)
 import_pb = load(IMPORT)
-sync_pb = load(SYNC)
 
 for path, template in ((ROOT, root), (IMPORT, import_pb)):
     label = rel(path)
@@ -201,14 +197,14 @@ if root_nested:
 
         override = props.get("alertDetailsOverride", {})
         check("#{{AlarmId}}" in override.get("alertDisplayNameFormat", ""),
-              "alert title must carry #<alarm id>: it is Sync's second reader")
+              "alert title must carry #<alarm id>: it is the second place the alarm id can be read from")
         for field in ("alertDisplayNameFormat", "alertDescriptionFormat"):
             placeholders = re.findall(r"\{\{(\w+)\}\}", override.get(field, ""))
             check(len(placeholders) <= 3, f"{field} may use at most 3 placeholders (platform limit)")
         check(override.get("alertSeverityColumnName") == "SentinelSeverity",
               "alert severity must come from the SentinelSeverity column")
-        # The SOCRadar level rides in the alert description (the incident inherits it): it is the
-        # only channel Sync can read without new credentials, and the label is not there.
+        # The SOCRadar level rides in the alert description (the incident inherits it): the
+        # incident has no label channel for it in this mode.
         check(override.get("alertDescriptionFormat") == "{{AlarmDescription}}",
               "alert description must be the composed AlarmDescription column")
         extend = re.search(r"\| extend AlarmDescription = ([^\n]+)", query)
@@ -222,7 +218,7 @@ if root_nested:
                   f"severity mapping {level}->{mapped} missing from the rule query")
         check('"Medium", "Low")' in query and "Informational" not in query,
               "everything below MEDIUM, INFO included, must become Low: the same mapping Direct mode uses "
-              "and the only one Sync's severity rank table knows")
+              "and the only one the severity levels collapse to")
 
         details = props.get("customDetails", {})
         check(0 < len(details) <= 20, "custom details must be 1..20 keys (platform limit)")
@@ -233,7 +229,7 @@ if root_nested:
         check(len(url) == 1 and url[0]["fieldMappings"] == [{"identifier": "Url", "columnName": "AlarmUrl"}],
               "the alarm URL must be mapped as the URL entity: it is the identity that survives the 50-value cliff")
         check('strcat("https://platform.socradar.com/company/", CompanyId, "/alarm/", AlarmId)' in query,
-              "AlarmUrl must be built as .../company/<id>/alarm/<alarm id>, the shape Sync parses")
+              "AlarmUrl must be built as .../company/<id>/alarm/<alarm id>, the shape the alarm id is parsed from")
 
         grouping = props.get("incidentConfiguration", {}).get("groupingConfiguration", {})
         check(props.get("incidentConfiguration", {}).get("createIncident") is True, "rule must create incidents")
@@ -276,7 +272,7 @@ if root_nested:
         actions = auto.get("actions", [])
         check(len(actions) == 1 and actions[0]["actionType"] == "ModifyProperties"
               and actions[0]["actionConfiguration"].get("labels") == [{"labelName": "SOCRadar"}],
-              "automation rule must add exactly the SOCRadar label: it is what Sync filters on")
+              "automation rule must add exactly the SOCRadar label: it marks the incident as SOCRadar's")
         check(any("alertBackedRuleId" in d for d in autos[0].get("dependsOn", [])),
               "automation rule must depend on the analytics rule")
 
@@ -390,87 +386,6 @@ check(json.dumps(workflow(root, "import")["properties"]["definition"], sort_keys
       == json.dumps(workflow(import_pb, "import")["properties"]["definition"], sort_keys=True),
       "import workflow definition differs between azuredeploy.json and Playbooks/SOCRadar-Alarm-Import")
 
-# --------------------------------------------------------------------------- sync workflow
-
-for path, template in ((ROOT, root), (SYNC, sync_pb)):
-    label = rel(path)
-    actions = walk(workflow(template, "sync")["properties"]["definition"]["actions"])
-    _, lookup = by_name(actions, "Check_Needs_Entity_Lookup")
-    check(lookup is not None, f"{label}: no Check_Needs_Entity_Lookup")
-    if lookup:
-        expr = json.dumps(lookup["expression"])
-        check('"@outputs(\'Extract_Alarm_ID\')", ""' in expr and '"Closed"' in expr
-              and '"@outputs(\'Check_Has_Synced_Tag\')", false' in expr,
-              f"{label}: the entity lookup must run only for closed, unsynced incidents without a label/title id")
-        check(lookup["runAfter"] == {"Check_Has_Synced_Tag": ["Succeeded"]},
-              f"{label}: Check_Needs_Entity_Lookup must follow Check_Has_Synced_Tag")
-    _, get = by_name(actions, "Get_Incident_Entities")
-    check(get and get["inputs"]["method"] == "POST" and "/entities?api-version=" in get["inputs"]["uri"]
-          and get["inputs"]["authentication"] == {"type": "ManagedServiceIdentity"},
-          f"{label}: Get_Incident_Entities must POST incidents/<id>/entities with the managed identity")
-    _, flt = by_name(actions, "Filter_Alarm_Url_Entities")
-    check(flt and "'Url'" in flt["inputs"]["where"] and "'/alarm/'" in flt["inputs"]["where"],
-          f"{label}: only URL entities that point at a SOCRadar alarm may be read")
-    _, from_entities = by_name(actions, "Alarm_ID_From_Entities")
-    check(from_entities and "'/alarm/'" in from_entities["inputs"] and "'?'" in from_entities["inputs"],
-          f"{label}: Alarm_ID_From_Entities must take the id after /alarm/ and strip a query string")
-    _, resolve = by_name(actions, "Resolve_Alarm_ID")
-    check(resolve and "actions('Alarm_ID_From_Entities')?['outputs']" in resolve["inputs"]
-          and "outputs('Extract_Alarm_ID')" in resolve["inputs"],
-          f"{label}: Resolve_Alarm_ID must fall back to the entity id through actions(), the lookup may be skipped")
-    check(resolve and resolve["runAfter"] == {"Check_Needs_Entity_Lookup": ["Succeeded"]},
-          f"{label}: Resolve_Alarm_ID must follow the lookup")
-    _, closed = by_name(actions, "Check_If_Closed_And_Not_Synced")
-    check(closed["runAfter"] == {"Resolve_Alarm_ID": ["Succeeded"]},
-          f"{label}: Check_If_Closed_And_Not_Synced must wait for Resolve_Alarm_ID")
-    # Every downstream reader uses the resolved id; only the resolver and its gate read Extract.
-    stale = [p for p, body in actions.items() if "outputs('Extract_Alarm_ID')" in json.dumps(body)
-             and p.split("/")[-1] not in ("Check_Needs_Entity_Lookup", "Resolve_Alarm_ID", "For_Each_Incident")
-             and not p.endswith("Check_Needs_Entity_Lookup") and "Check_Needs_Entity_Lookup/" not in p]
-    # Container actions (If/Foreach) embed their children, so drop paths that are ancestors of the gate.
-    stale = [p for p in stale if not (actions[p].get("type") in ("If", "Foreach") and any(
-        q.startswith(p + "/") for q in actions if q.endswith("Check_Needs_Entity_Lookup") or q.endswith("Resolve_Alarm_ID")))]
-    check(not stale, f"{label}: actions still read the unresolved Extract_Alarm_ID: {stale[:3]}")
-    for name in ("Update_SOCRadar_Status", "Update_SOCRadar_Severity"):
-        _, body = by_name(actions, name)
-        check(body and "outputs('Resolve_Alarm_ID')" in json.dumps(body["inputs"].get("body")),
-              f"{label}: {name} must send the resolved alarm id")
-
-    # Severity: the label reader stays first; when it is empty the level comes from the
-    # description the alert-backed rule wrote. The rank reads the resolved value only.
-    _, from_desc = by_name(actions, "Severity_From_Description")
-    check(from_desc is not None and "?['properties']?['description']" in from_desc["inputs"],
-          f"{label}: Severity_From_Description must read the incident description")
-    for level in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"):
-        check(from_desc is not None and f"'{SEVERITY_MARK}{level}'), '{level}'" in from_desc["inputs"],
-              f"{label}: Severity_From_Description must map '{SEVERITY_MARK}{level}' to {level}")
-    check(from_desc is not None and from_desc["inputs"].rstrip().endswith(", '')))))"),
-          f"{label}: Severity_From_Description must fall back to '' (unknown -> rank 0)")
-    check(from_desc is not None and from_desc["runAfter"] == {"Extract_SOCRadar_Severity": ["Succeeded"]},
-          f"{label}: Severity_From_Description must follow the label reader")
-    _, resolve_sev = by_name(actions, "Resolve_SOCRadar_Severity")
-    check(resolve_sev is not None and resolve_sev["inputs"] ==
-          "@if(empty(outputs('Extract_SOCRadar_Severity')), outputs('Severity_From_Description'), "
-          "outputs('Extract_SOCRadar_Severity'))",
-          f"{label}: Resolve_SOCRadar_Severity must prefer the label and fall back to the description")
-    check(resolve_sev is not None and resolve_sev["runAfter"] == {"Severity_From_Description": ["Succeeded"]},
-          f"{label}: Resolve_SOCRadar_Severity must follow Severity_From_Description")
-    _, rank = by_name(actions, "Rank_SOCRadar_Severity")
-    check(rank is not None and rank["inputs"].count("outputs('Resolve_SOCRadar_Severity')") == 5
-          and "outputs('Extract_SOCRadar_Severity')" not in rank["inputs"],
-          f"{label}: Rank_SOCRadar_Severity must rank the resolved severity, not the label alone")
-    check(rank is not None and rank["runAfter"] == {"Resolve_SOCRadar_Severity": ["Succeeded"]},
-          f"{label}: Rank_SOCRadar_Severity must follow Resolve_SOCRadar_Severity")
-    # One marker, two writers (rule query and Sync reader): they must agree (EXP-AZURE-0178).
-    rule_query = next(r for r in nested_rule(root)["properties"]["template"]["resources"]
-                      if r["type"].endswith("/alertRules"))["properties"]["query"]
-    check(SEVERITY_MARK in rule_query and from_desc is not None and SEVERITY_MARK in from_desc["inputs"],
-          f"{label}: the severity marker text must be identical in the rule query and in Sync")
-
-check(json.dumps(workflow(root, "sync")["properties"]["definition"], sort_keys=True)
-      == json.dumps(workflow(sync_pb, "sync")["properties"]["definition"], sort_keys=True),
-      "sync workflow definition differs between azuredeploy.json and Playbooks/SOCRadar-Alarm-Sync")
-
 # --------------------------------------------------------------------------- report
 
 if failures:
@@ -479,4 +394,4 @@ if failures:
         print("  - " + item)
     print(f"\n{len(failures)} problem(s) in {checks} checks.")
     sys.exit(1)
-print(f"Alert-backed mode: rule limits, import cap and checkpoint hold, Sync entity reader verified in {checks} checks.")
+print(f"Alert-backed mode: rule limits, import cap and checkpoint hold verified in {checks} checks.")

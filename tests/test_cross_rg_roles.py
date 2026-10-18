@@ -15,7 +15,6 @@ Checks, for the one-click template and the standalone import playbook:
   1. importSentinelRoleDefinitionId exists and elevates on EnableIoCEnrichment.
   2. Every nested role assignment for the import identity uses that variable, in
      both the assignment name (the guid seed) and roleDefinitionId.
-  3. The sync identity keeps the plain sentinelRoleDefinitionId (least privilege).
 """
 
 import json
@@ -40,10 +39,6 @@ def check(cond, msg):
 
 def is_import(name):
     return "ImportPlaybookName" in name or "parameters('PlaybookName')" in name
-
-
-def is_sync(name):
-    return "SyncPlaybookName" in name
 
 
 for rel in FILES:
@@ -83,12 +78,6 @@ for rel in FILES:
                     "%s: nested import assignment name must be seeded with the same "
                     "role variable it grants, else the name and the grant drift: %s"
                     % (rel, name),
-                )
-            elif is_sync(name):
-                check(
-                    IMPORT_VAR not in role,
-                    "%s: the sync identity must stay on SentinelRoleLevel, not the "
-                    "elevated import role: %s" % (rel, role),
                 )
 
     check(

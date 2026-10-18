@@ -16,7 +16,6 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.join(REPO, "azuredeploy.json")
 IMPORT = os.path.join(REPO, "Playbooks", "SOCRadar-Alarm-Import", "azuredeploy.json")
-SYNC = os.path.join(REPO, "Playbooks", "SOCRadar-Alarm-Sync", "azuredeploy.json")
 TEST = os.path.join(REPO, "tests", "test_alert_backed_mode.py")
 
 
@@ -38,7 +37,7 @@ def workflow(template, kind):
         if resource["type"] != "Microsoft.Logic/workflows":
             continue
         actions = resource["properties"]["definition"]["actions"]
-        if (kind == "import" and "Pagination_Loop" in actions) or (kind == "sync" and "For_Each_Incident" in actions):
+        if kind == "import" and "Pagination_Loop" in actions:
             return resource
 
 
@@ -120,17 +119,6 @@ def m_rule_deployment_unconditional(t):
     nested["condition"] = "[true()]"
 
 
-def m_sync_reads_unresolved_id(t):
-    actions = workflow(t, "sync")["properties"]["definition"]["actions"]
-    update = find(actions, "Update_SOCRadar_Status")
-    update["inputs"]["body"] = json.loads(json.dumps(update["inputs"]["body"]).replace("Resolve_Alarm_ID", "Extract_Alarm_ID"))
-
-
-def m_sync_skips_resolver(t):
-    actions = workflow(t, "sync")["properties"]["definition"]["actions"]
-    find(actions, "Check_If_Closed_And_Not_Synced")["runAfter"] = {"Check_Has_Synced_Tag": ["Succeeded"]}
-
-
 def m_rule_description_plain(t):
     r, _ = rule(t)
     r["properties"]["alertDetailsOverride"]["alertDescriptionFormat"] = "{{AlarmText}}"
@@ -139,30 +127,6 @@ def m_rule_description_plain(t):
 def m_rule_marker_renamed(t):
     r, _ = rule(t)
     r["properties"]["query"] = r["properties"]["query"].replace("SOCRadar severity: ", "Severity: ")
-
-
-def m_rank_reads_labels_only(t):
-    actions = workflow(t, "sync")["properties"]["definition"]["actions"]
-    rank = find(actions, "Rank_SOCRadar_Severity")
-    rank["inputs"] = rank["inputs"].replace("Resolve_SOCRadar_Severity", "Extract_SOCRadar_Severity")
-
-
-def m_description_skips_critical(t):
-    actions = workflow(t, "sync")["properties"]["definition"]["actions"]
-    reader = find(actions, "Severity_From_Description")
-    reader["inputs"] = reader["inputs"].replace("'SOCRadar severity: CRITICAL'), 'CRITICAL'", "'SOCRadar severity: CRITICAL'), 'HIGH'")
-
-
-def m_resolve_prefers_description(t):
-    actions = workflow(t, "sync")["properties"]["definition"]["actions"]
-    find(actions, "Resolve_SOCRadar_Severity")["inputs"] = (
-        "@if(empty(outputs('Severity_From_Description')), outputs('Extract_SOCRadar_Severity'), "
-        "outputs('Severity_From_Description'))")
-
-
-def m_sync_reads_any_url(t):
-    actions = workflow(t, "sync")["properties"]["definition"]["actions"]
-    find(actions, "Filter_Alarm_Url_Entities")["inputs"]["where"] = "@equals(item()?['kind'], 'Url')"
 
 
 MUTATIONS = [
@@ -180,14 +144,8 @@ MUTATIONS = [
     ("marker written before ingest", (ROOT, IMPORT), m_marker_written_before_ingest),
     ("cap formula loosened", (ROOT, IMPORT), m_cap_formula_loosened),
     ("rule deployed in Direct mode", (ROOT, IMPORT), m_rule_deployment_unconditional),
-    ("Sync sends unresolved id", (ROOT, SYNC), m_sync_reads_unresolved_id),
-    ("Sync skips the resolver", (ROOT, SYNC), m_sync_skips_resolver),
-    ("Sync reads any URL entity", (ROOT, SYNC), m_sync_reads_any_url),
     ("rule description drops the marker", (ROOT, IMPORT), m_rule_description_plain),
     ("rule marker text renamed", (ROOT, IMPORT), m_rule_marker_renamed),
-    ("rank reads labels only", (ROOT, SYNC), m_rank_reads_labels_only),
-    ("description reader maps CRITICAL wrong", (ROOT, SYNC), m_description_skips_critical),
-    ("resolver prefers description", (ROOT, SYNC), m_resolve_prefers_description),
 ]
 
 
@@ -204,7 +162,8 @@ def main():
             try:
                 result = subprocess.run([sys.executable, TEST], cwd=REPO, capture_output=True, text=True,
                                         timeout=60, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
-                rc = result.returncode
+                # A crash also exits 1; only the test's own verdict line counts as a catch.
+                rc = result.returncode if "CHECK FAILED" in result.stdout or result.returncode == 0 else 125
             except subprocess.TimeoutExpired:
                 rc = 124
         finally:

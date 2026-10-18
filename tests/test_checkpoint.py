@@ -28,7 +28,6 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.join(REPO, "azuredeploy.json")
 IMPORT = os.path.join(REPO, "Playbooks", "SOCRadar-Alarm-Import", "azuredeploy.json")
-SYNC = os.path.join(REPO, "Playbooks", "SOCRadar-Alarm-Sync", "azuredeploy.json")
 
 STORAGE_TABLE_DATA_CONTRIBUTOR = "0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3"
 # uniqueString() returns 13 characters. A storage account name may be at most 24.
@@ -295,25 +294,10 @@ for path in (ROOT, IMPORT):
             expression = built["inputs"]
             check("SOCRadar-Alarm-" in expression,
                   f"{rel(path)}: {action_name} writes no SOCRadar-Alarm- label, so an incident "
-                  f"created through {why} leaves the sync playbook nothing but the title to "
+                  f"created through {why} leaves nothing but the title to "
                   f"find the alarm id in")
             check("alarm_id" in expression,
                   f"{rel(path)}: the SOCRadar-Alarm- label in {action_name} is not built from alarm_id")
-
-for path in (ROOT, SYNC):
-    for resource in workflows(load(path)):
-        _, extract = find(actions_of(resource), "Extract_Alarm_ID")
-        if extract is None:
-            continue
-        expression = extract["inputs"]
-        check("SOCRadar-Alarm-" in expression and "labels" in expression,
-              f"{rel(path)}: Extract_Alarm_ID does not read the alarm id from the labels")
-        # Every incident created before this change has no label. Dropping the title
-        # fallback would strand all of them: closed forever in Microsoft Sentinel, never
-        # written back to SOCRadar.
-        check("title" in expression,
-              f"{rel(path)}: Extract_Alarm_ID lost the title fallback, so incidents created "
-              f"before the label existed would never sync back")
 
 if checks < 60:
     failures.append(f"only {checks} assertions ran - this check has gone blind")

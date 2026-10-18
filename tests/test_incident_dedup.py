@@ -9,10 +9,8 @@ ways, and the third is the one a customer sees:
 
   * a leftouter join multiplies its output rows
   * count() and avg() come out doubled
-  * a "where Status != 'Closed'" matches a row written before the incident was closed, and
-    "where not(Labels has 'Synced')" matches a row written before the Synced label was added
-    -- so the rule that alerts on unsynced closed incidents fires for incidents that ARE
-    synced and closed
+  * a "where Status != 'Closed'" matches a row written before the incident was closed, so a
+    closed incident is still listed as open
 
 A leftanti join is the one shape that does not need it: duplicate rows on the right add
 nothing, and collapsing first can drop an incident whose newest version falls outside the
@@ -66,11 +64,8 @@ def audit(text, where, path_key=None):
 
 
 # --- the analytics rule that raises alerts, and the hunting query ----------------------
-for rel in ["Analytic Rules/SOCRadarUnsyncedClosedIncident.yaml"]:
-    p = ROOT / rel
-    check(p.exists(), f"{rel}: missing - this check has gone blind")
-    if p.exists():
-        audit(p.read_text(), rel)
+for p in sorted((ROOT / "Analytic Rules").glob("*.yaml")):
+    audit(p.read_text(), p.relative_to(ROOT).as_posix())
 
 # --- the ARM template's embedded queries ------------------------------------------------
 def walk(o, where):

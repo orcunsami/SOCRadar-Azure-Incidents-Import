@@ -15,7 +15,8 @@ shape and never runs a workflow action.
 | `../tools/check_template_drift.py` | The standalone playbooks have not fallen behind `azuredeploy.json` |
 | `../tools/check_analytic_rules.py` | The shipped analytic rules are well formed |
 | `test_checkpoint.py` | The import window comes from the storage checkpoint, not from incident titles: the account's name and security properties, the role assignment's scope, the GET/PUT headers Table Storage requires, and that the checkpoint is written only after a complete read |
-| `test_severity_sync_logic.py` | The severity write-back can only raise a severity, is gated by `SyncSeverity`, is judged by `is_success`, and that both label builders carry the labels Sync reads |
+| `test_no_writeback.py` | The deployable template carries one Logic App, every call to SOCRadar is a GET (bar one read-only IOC lookup), and no Sync string is left anywhere |
+| `../tools/check_parent_subset.py` | Every template is the parent repo's template at `PARENT_SHA` minus the documented Sync differences, so a hand edit or a stale copy shows up |
 | `test_management_base_url.py` | No template hardcodes the public-cloud ARM host |
 | `test_hunting_queries.py` | Every column the hunting queries read is one the deployment creates |
 | `test_cross_rg_roles.py` | The cross-RG nested role assignments grant the import identity the same elevated role the same-RG path grants, so IoC enrichment does not silently 403 when the workspace lives in another resource group |
@@ -23,8 +24,7 @@ shape and never runs a workflow action.
 | `test_incident_dedup.py` | Every `SecurityIncident` query collapses to the newest version of each incident |
 | `test_incident_dedup_projection.py` | The existing-incident page is projected to the fields its consumers read |
 | `test_domain_tld_whitelist.py` | Domain entities are matched against real country codes, not any two letters |
-| `test_alert_backed_mode.py` | Alert-backed mode: rule limits, import cap, checkpoint and the Sync entity reader |
-| `test_sync_window.py` | Sync reaches back 24 hours, drops synced incidents before the loop, and a failed page fails the run |
+| `test_alert_backed_mode.py` | Alert-backed mode: rule limits, import cap and checkpoint |
 | `test_query_logic.py` | The volume-spike rule, the not-yet-closed query and the Alarm Overview query do what the README says |
 
 Run them all locally:
