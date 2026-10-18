@@ -141,7 +141,7 @@ def main():
         compared += 1
         for kind, path in diff(parent, child):
             text = SEP.join(path)
-            hit = next((a for a in ALLOWED.get(rel, []) if a[0] == kind and text.startswith(a[1])), None)
+            hit = next((a for a in ALLOWED.get(rel, []) if a[0] == kind and (text == a[1] or text.startswith(a[1] + SEP))), None)
             if hit:
                 allowed_hits.add((rel, hit[0], hit[1]))
             else:

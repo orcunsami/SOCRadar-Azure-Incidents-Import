@@ -168,9 +168,9 @@ that from re-importing anything.
 
 ## Moving to the full version
 
-To move to the full version, deploy [SOCRadar-Azure-Incidents](https://github.com/orcunsami/SOCRadar-Azure-Incidents) into a new resource group and delete this deployment's resource group afterwards; the steps and one label caveat are in [UPGRADING.md](UPGRADING.md).
+To move to the full version, redeploy [SOCRadar-Azure-Incidents](https://github.com/orcunsami/SOCRadar-Azure-Incidents) over this same resource group with the same parameters, which updates the import Logic App in place; [UPGRADING.md](UPGRADING.md) has the steps and one label caveat.
 
-Never deploy both into one resource group: both name the import Logic App `SOCRadar-Alarm-Import`, so the second deployment overwrites the first.
+Do not delete the Logic App or the resource group first, and never run the two repos as separate installs in one workspace: they name the import Logic App and its role assignments identically, so the second install fails or overwrites the first.
 
 ## Rotating the API key
 

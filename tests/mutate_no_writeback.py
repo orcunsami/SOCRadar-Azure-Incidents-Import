@@ -85,6 +85,35 @@ def ioc_post_in_import(t):
         "inputs": {"method": "POST", "uri": "https://platform.socradar.com/api/ioc_enrichment/get/indicator_details"}}
 
 
+def concat_post(t):
+    first_workflow(t)["properties"]["definition"]["actions"]["Zz_Concat"] = {
+        "type": "Http", "runAfter": {},
+        "inputs": {"method": "POST",
+                   "uri": "@{concat('https://platform.socradar', '.com/api/company/1/alarms/status/change')}"}}
+
+
+def param_uri_post(t):
+    first_workflow(t)["properties"]["definition"]["actions"]["Zz_Param"] = {
+        "type": "Http", "runAfter": {}, "inputs": {"method": "PATCH", "uri": "@parameters('AnyUrl')"}}
+
+
+def switch_default_write(t):
+    first_workflow(t)["properties"]["definition"]["actions"]["Zz_Switch"] = {
+        "type": "Switch", "runAfter": {}, "expression": "x", "cases": {},
+        "default": {"actions": {"Zz_Write": copy.deepcopy(WRITE_ACTION)}}}
+
+
+def workflow_type_action(t):
+    first_workflow(t)["properties"]["definition"]["actions"]["Zz_Child"] = {
+        "type": "Workflow", "runAfter": {}, "inputs": {"host": {"workflow": {"id": "x"}}}}
+
+
+def nested_logic_app(t):
+    t["resources"].append({"type": "Microsoft.Resources/deployments", "apiVersion": "2022-09-01",
+                           "name": "zz-nested", "properties": {"mode": "Incremental", "template": {
+                               "resources": [copy.deepcopy(first_workflow(t))]}}})
+
+
 def ioc_dir(root):
     os.makedirs(os.path.join(root, "Playbooks", "SOCRadar-IOC-Enrichment"))
     with open(os.path.join(root, "Playbooks", "SOCRadar-IOC-Enrichment", "azuredeploy.json"), "w") as fh:
@@ -147,6 +176,11 @@ WRITEBACK = [
     ("a second Logic App in the root template", with_template(ROOT, second_workflow)),
     ("a Sync playbook directory", sync_dir),
     ("a SyncSeverity parameter", with_template(ROOT, sync_parameter)),
+    ("a POST to a SOCRadar URI built with concat", with_template(ROOT, concat_post)),
+    ("a PATCH to a URI that comes from a parameter", with_template(ROOT, param_uri_post)),
+    ("a write action in a Switch default branch", with_template(ROOT, switch_default_write)),
+    ("a Workflow-type action", with_template(ROOT, workflow_type_action)),
+    ("a Logic App hidden in a nested deployment", with_template(ROOT, nested_logic_app)),
     ("an IOC-Enrichment playbook directory", ioc_dir),
     ("a lookup POST in the Import playbook", with_template(IMPORT, ioc_post_in_import)),
     ("a README Deploy button back on the old repo", readme_edit(readme_old_button)),

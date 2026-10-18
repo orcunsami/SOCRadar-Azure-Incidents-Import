@@ -51,28 +51,43 @@ def walk_actions(actions, prefix=""):
         if not isinstance(body, dict):
             continue
         yield from walk_actions(body.get("actions"), prefix + name + "/")
-        branch = body.get("else")
-        if isinstance(branch, dict):
-            yield from walk_actions(branch.get("actions"), prefix + name + "/else/")
+        for key in ("else", "default"):
+            branch = body.get(key)
+            if isinstance(branch, dict):
+                yield from walk_actions(branch.get("actions"), prefix + name + f"/{key}/")
         for case in (body.get("cases") or {}).values():
             yield from walk_actions(case.get("actions"), prefix + name + "/")
 
 
 def workflows(template):
-    return [r for r in template.get("resources", []) if r.get("type") == "Microsoft.Logic/workflows"]
+    """Every Logic App in the template, including those inside a nested deployment."""
+    found = []
+    for resource in template.get("resources", []):
+        if resource.get("type") == "Microsoft.Logic/workflows":
+            found.append(resource)
+        inner = (resource.get("properties") or {}).get("template")
+        if isinstance(inner, dict):
+            found.extend(workflows(inner))
+    return found
 
 
-def socradar_calls(template):
-    """Yield (action path, METHOD, uri path) for every HTTP action aimed at socradar.com."""
+# What a workflow may do. Anything else (Workflow, Function, HttpWebhook, ...) can reach
+# SOCRadar in a way this file cannot read, so it fails until someone adds it on purpose.
+ALLOWED_TYPES = {"Http", "ApiConnection", "Compose", "InitializeVariable", "SetVariable",
+                 "IncrementVariable", "Until", "Foreach", "If", "Switch", "Scope", "Select",
+                 "Query", "ParseJson", "Wait", "Terminate"}
+
+# The only places a non-GET call may go: Azure management, the checkpoint table, the two
+# ingestion endpoints and Log Analytics. A URI built any other way (concat of a host name,
+# a parameter) is not on this list, so it fails even if it ends up at SOCRadar.
+WRITE_TARGETS = ("@{parameters('ManagementBaseUrl')}", "@{parameters('CheckpointTableUrl')}",
+                 "@{concat(parameters('AuditDcrEndpoint')", "@{concat(parameters('DceEndpoint')",
+                 "https://api.loganalytics.io/")
+
+
+def all_actions(template):
     for resource in workflows(template):
-        for path, body in walk_actions(resource["properties"]["definition"].get("actions")):
-            if body.get("type") != "Http":
-                continue
-            inputs = body.get("inputs") or {}
-            uri = str(inputs.get("uri", ""))
-            if "socradar.com" not in uri.lower():
-                continue
-            yield path, str(inputs.get("method", "")).upper(), "/" + uri.split("socradar.com/", 1)[-1].split("?")[0]
+        yield from walk_actions(resource["properties"]["definition"].get("actions"))
 
 
 # 1. The deployable template carries the import Logic App and nothing else.
@@ -98,11 +113,19 @@ for path in [ROOT] + PLAYBOOKS:
 # 4. Every call to SOCRadar is a GET.
 seen_get = 0
 for path in [ROOT] + PLAYBOOKS:
-    for action, method, uri in socradar_calls(load(path)):
-        if method == "GET":
+    for action, body in all_actions(load(path)):
+        kind = body.get("type")
+        if kind not in ALLOWED_TYPES:
+            failures.append(f"{rel(path)}: {action} is a {kind!r} action, which this check cannot read")
+            continue
+        if kind != "Http":
+            continue
+        inputs = body.get("inputs") or {}
+        method, uri = str(inputs.get("method", "")).upper(), str(inputs.get("uri", ""))
+        if "platform.socradar.com" in uri.lower() and method == "GET":
             seen_get += 1
-        else:
-            failures.append(f"{rel(path)}: {action} sends {method} {uri} to SOCRadar")
+        if method != "GET" and not uri.startswith(WRITE_TARGETS):
+            failures.append(f"{rel(path)}: {action} sends {method} to a target not on the write list: {uri[:80]}")
 
 # 5. The README installs and describes this repo.
 OLD_REPO = "orcunsami%2FSOCRadar-Azure-Incidents%2F"
