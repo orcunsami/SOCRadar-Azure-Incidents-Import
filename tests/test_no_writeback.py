@@ -10,7 +10,10 @@ Checked on every template the repo ships:
   - there is no Sync playbook, no Sync parameter and no Synced label anywhere;
   - every call a workflow makes to platform.socradar.com is a GET. The one optional
     IOC-Enrichment playbook also POSTs to a read-only lookup endpoint, and that single
-    endpoint is allow-listed there and nowhere else.
+    endpoint is allow-listed there and nowhere else;
+  - the README says the same: every Deploy button installs THIS repo (a button left on the
+    bidirectional repo would silently deploy the Sync half), and Sync or write-back is
+    mentioned only in the section about moving to the bidirectional version.
 
 Run:  python3 tests/test_no_writeback.py
 """
@@ -18,6 +21,7 @@ Run:  python3 tests/test_no_writeback.py
 import glob
 import json
 import os
+import re
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -103,6 +107,23 @@ for path in [ROOT] + PLAYBOOKS:
             continue
         else:
             failures.append(f"{rel(path)}: {action} sends {method} {uri} to SOCRadar")
+
+# 5. The README installs and describes this repo.
+OLD_REPO = "orcunsami%2FSOCRadar-Azure-Incidents%2F"
+THIS_REPO = "orcunsami%2FSOCRadar-Azure-Incidents-Import%2F"
+readme = open(os.path.join(REPO, "README.md"), encoding="utf-8").read()
+if OLD_REPO in readme:
+    failures.append("README.md: a Deploy button still points at the bidirectional repo")
+buttons = re.findall(r"deploytoazurebutton\)\]\((https://portal\.azure\.com/[^)]+)\)", readme)
+if not buttons:
+    failures.append("README.md: no Deploy button found - this check has gone blind")
+for url in buttons:
+    if THIS_REPO not in url:
+        failures.append(f"README.md: a Deploy button does not point at this repo: {url[:90]}")
+outside = re.sub(r"## Moving to the bidirectional version.*?(?=\n## )", "", readme, flags=re.S)
+for match in re.finditer(r"sync|write-?back", outside, flags=re.I):
+    line = outside.count("\n", 0, match.start()) + 1
+    failures.append(f"README.md: {match.group(0)!r} outside the section on the bidirectional version (line {line} of the rest)")
 
 if seen_get == 0:
     failures.append("no GET to SOCRadar found in any template - this check has gone blind")

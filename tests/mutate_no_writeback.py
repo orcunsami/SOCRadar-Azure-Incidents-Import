@@ -111,6 +111,28 @@ def drop_a_variable(t):
     t["variables"].pop(next(iter(t["variables"])))
 
 
+def readme_edit(fn):
+    def apply(root):
+        path = os.path.join(root, "README.md")
+        text = open(path, encoding="utf-8").read()
+        new = fn(text)
+        assert new != text, "README mutation changed nothing"
+        open(path, "w", encoding="utf-8").write(new)
+    return apply
+
+
+def readme_old_button(text):
+    return text.replace("orcunsami%2FSOCRadar-Azure-Incidents-Import%2F", "orcunsami%2FSOCRadar-Azure-Incidents%2F", 1)
+
+
+def readme_mentions_sync(text):
+    return text.replace("## Prerequisites", "The `SyncSeverity` switch is described here.\n\n## Prerequisites", 1)
+
+
+def readme_no_buttons(text):
+    return text.replace("deploytoazurebutton", "deploybutton")
+
+
 def edit_standalone_playbook(t):
     t["parameters"]["CompanyId"]["metadata"] = {"description": "edited by hand"}
 
@@ -124,6 +146,9 @@ WRITEBACK = [
     ("a SyncSeverity parameter", with_template(ROOT, sync_parameter)),
     ("IOC playbook POSTs to a different endpoint", with_template(IOC, ioc_other_endpoint)),
     ("the lookup POST outside the IOC playbook", with_template(IMPORT, ioc_post_in_import)),
+    ("a README Deploy button back on the old repo", readme_edit(readme_old_button)),
+    ("the README describes a Sync switch", readme_edit(readme_mentions_sync)),
+    ("the README loses its Deploy buttons", readme_edit(readme_no_buttons)),
 ]
 SUBSET = [
     ("a parameter default edited by hand", with_template(ROOT, edit_import_default)),
