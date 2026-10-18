@@ -1,6 +1,6 @@
 # SOCRadar Alarms for Microsoft Sentinel
 
-Imports SOCRadar alarms into Microsoft Sentinel as incidents. Nothing is written back to SOCRadar: closing an incident in Microsoft Sentinel does not change the alarm in SOCRadar. The version that also writes closures back is [SOCRadar-Azure-Incidents](https://github.com/orcunsami/SOCRadar-Azure-Incidents).
+Imports SOCRadar alarms into Microsoft Sentinel as incidents. SOCRadar is only read, never changed: closing an incident in Microsoft Sentinel does not change the alarm in SOCRadar. The full version of this integration is [SOCRadar-Azure-Incidents](https://github.com/orcunsami/SOCRadar-Azure-Incidents).
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Forcunsami%2FSOCRadar-Azure-Incidents-Import%2Fmaster%2Fazuredeploy.json)
 
@@ -166,21 +166,11 @@ the checkpoint; a deployment into a *different* resource group starts with an em
 first run falls back to `InitialLookbackMinutes`. Either way the de-duplication snapshot stops
 that from re-importing anything.
 
-## Moving to the bidirectional version
+## Moving to the full version
 
-The version that also writes closures back to SOCRadar is
-[SOCRadar-Azure-Incidents](https://github.com/orcunsami/SOCRadar-Azure-Incidents). The optional
-IOC-Enrichment playbook, which looks indicators up in SOCRadar, lives there too. Three things to
-know before you put it next to this one:
+To move to the full version, deploy [SOCRadar-Azure-Incidents](https://github.com/orcunsami/SOCRadar-Azure-Incidents) into a new resource group and delete this deployment's resource group afterwards; the steps and one label caveat are in [UPGRADING.md](UPGRADING.md).
 
-- It adds a second Logic App, `SOCRadar-Alarm-Sync`. This repo never deploys it and never removes
-  it. If `SOCRadar-Alarm-Sync` already exists in the resource group you deploy this into, disable
-  or delete it, or the write-back keeps running.
-- Both repos name the import Logic App `SOCRadar-Alarm-Import`, so deploying both into one
-  resource group updates the same Logic App. Use one per resource group.
-- With `ImportAllStatuses=true` this repo imports closed alarms without a `Synced` label. Label
-  those incidents `Synced` before you add the bidirectional version, or it treats them as analyst
-  closures and writes a status back for each.
+Never deploy both into one resource group: both name the import Logic App `SOCRadar-Alarm-Import`, so the second deployment overwrites the first.
 
 ## Rotating the API key
 
@@ -264,8 +254,8 @@ environments that deploy the pieces separately -- see [below](#deploying-playboo
 
 ## Incident Labels
 
-Every imported incident carries these labels. The hunting queries read them, and the
-bidirectional version reads them too, so they are a contract, not decoration.
+Every imported incident carries these labels. The hunting queries and the full
+version read them, so they are a contract, not decoration.
 
 | Label | Example | Purpose |
 |---|---|---|
@@ -377,8 +367,8 @@ already closed with the classification mapped from the alarm status:
 | `RESOLVED` | `TruePositive` | `SuspiciousActivity` |
 | anything else (e.g. `INVESTIGATING`) | `Undetermined` | none |
 
-These incidents are created closed and are not touched again. Nothing is written back to
-SOCRadar for them.
+These incidents are created closed and are not touched again. SOCRadar is not called again
+for them.
 
 ## Severity mapping
 
@@ -543,5 +533,5 @@ az role assignment delete --ids <id>
 
 ## Support
 
-- **Detailed Documentation (SOCRadar customers):** [Microsoft Azure Sentinel Integration (Bi-Directional)](https://help.socradar.io/hc/en-us/articles/41316851769745-Microsoft-Azure-Sentinel-Integration-Bi-Directional)
+- **Detailed Documentation (SOCRadar customers):** [Microsoft Azure Sentinel Integration](https://help.socradar.io/hc/en-us/articles/41316851769745-Microsoft-Azure-Sentinel-Integration-Bi-Directional)
 - **Support email:** integration@socradar.io

@@ -12,8 +12,9 @@ Checked on every template the repo ships:
     optional IOC-Enrichment playbook of the bidirectional repo POSTs to a lookup endpoint,
     so it is not shipped here either;
   - the README says the same: every Deploy button installs THIS repo (a button left on the
-    bidirectional repo would silently deploy the Sync half), and Sync or write-back is
-    mentioned only in the section about moving to the bidirectional version.
+    full repo would silently deploy the Sync half), and the words sync, write-back and
+    bidirectional appear nowhere in its text (link addresses excepted). The move to the full
+    version lives in UPGRADING.md.
 
 Run:  python3 tests/test_no_writeback.py
 """
@@ -108,17 +109,17 @@ OLD_REPO = "orcunsami%2FSOCRadar-Azure-Incidents%2F"
 THIS_REPO = "orcunsami%2FSOCRadar-Azure-Incidents-Import%2F"
 readme = open(os.path.join(REPO, "README.md"), encoding="utf-8").read()
 if OLD_REPO in readme:
-    failures.append("README.md: a Deploy button still points at the bidirectional repo")
+    failures.append("README.md: a Deploy button still points at the full repo")
 buttons = re.findall(r"deploytoazurebutton\)\]\((https://portal\.azure\.com/[^)]+)\)", readme)
 if not buttons:
     failures.append("README.md: no Deploy button found - this check has gone blind")
 for url in buttons:
     if THIS_REPO not in url:
         failures.append(f"README.md: a Deploy button does not point at this repo: {url[:90]}")
-outside = re.sub(r"## Moving to the bidirectional version.*?(?=\n## )", "", readme, flags=re.S)
-for match in re.finditer(r"sync|write-?back", outside, flags=re.I):
-    line = outside.count("\n", 0, match.start()) + 1
-    failures.append(f"README.md: {match.group(0)!r} outside the section on the bidirectional version (line {line} of the rest)")
+prose = re.sub(r"\]\([^)]*\)", "]", readme)  # link targets are addresses, not description
+for match in re.finditer(r"sync|write-?back|written back|bi-?directional", prose, flags=re.I):
+    line = prose.count("\n", 0, match.start()) + 1
+    failures.append(f"README.md: {match.group(0)!r} on line {line} of the text: this repo describes no write-back")
 
 if seen_get == 0:
     failures.append("no GET to SOCRadar found in any template - this check has gone blind")

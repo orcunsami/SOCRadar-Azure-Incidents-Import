@@ -128,6 +128,10 @@ def readme_mentions_sync(text):
     return text.replace("## Prerequisites", "The `SyncSeverity` switch is described here.\n\n## Prerequisites", 1)
 
 
+def readme_mentions_bidirectional(text):
+    return text.replace("## Prerequisites", "This is the bidirectional edition.\n\n## Prerequisites", 1)
+
+
 def readme_no_buttons(text):
     return text.replace("deploytoazurebutton", "deploybutton")
 
@@ -147,6 +151,7 @@ WRITEBACK = [
     ("a lookup POST in the Import playbook", with_template(IMPORT, ioc_post_in_import)),
     ("a README Deploy button back on the old repo", readme_edit(readme_old_button)),
     ("the README describes a Sync switch", readme_edit(readme_mentions_sync)),
+    ("the README calls itself bidirectional", readme_edit(readme_mentions_bidirectional)),
     ("the README loses its Deploy buttons", readme_edit(readme_no_buttons)),
 ]
 SUBSET = [
