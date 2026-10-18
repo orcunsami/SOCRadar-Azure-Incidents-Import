@@ -51,7 +51,7 @@ storage account, the Data Collection Endpoint, the workbook, the Microsoft Senti
 connection and an **enabled** SOCRadar-Alarm-Import Logic App were all created, and only then did
 the deployment fail. If you are looking at a resource group in that state from an earlier
 attempt, redeploying over it with the correct name reconciles it; the Logic App in it is
-billable until then, so disable it or delete the resource group.
+billable until then, so disable it, or delete the resource group if the workspace is not in it.
 
 With `DeployNewWorkspace` at its default `true` a typo does not fail: it creates a second,
 empty workspace under the misspelled name. The pre-check is skipped in that mode, because the

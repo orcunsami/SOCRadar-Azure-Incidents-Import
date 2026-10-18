@@ -63,7 +63,7 @@ def workflows(template):
     """Every Logic App in the template, including those inside a nested deployment."""
     found = []
     for resource in template.get("resources", []):
-        if resource.get("type") == "Microsoft.Logic/workflows":
+        if str(resource.get("type", "")).lower() == "microsoft.logic/workflows":
             found.append(resource)
         inner = (resource.get("properties") or {}).get("template")
         if isinstance(inner, dict):
@@ -118,6 +118,8 @@ for path in [ROOT] + PLAYBOOKS:
         if kind not in ALLOWED_TYPES:
             failures.append(f"{rel(path)}: {action} is a {kind!r} action, which this check cannot read")
             continue
+        if kind == "ApiConnection" and "azuresentinel" not in json.dumps(body.get("inputs")).lower():
+            failures.append(f"{rel(path)}: {action} is an ApiConnection to something other than azuresentinel")
         if kind != "Http":
             continue
         inputs = body.get("inputs") or {}
@@ -126,6 +128,18 @@ for path in [ROOT] + PLAYBOOKS:
             seen_get += 1
         if method != "GET" and not uri.startswith(WRITE_TARGETS):
             failures.append(f"{rel(path)}: {action} sends {method} to a target not on the write list: {uri[:80]}")
+        if method != "GET" and "socradar.com" in uri.lower():
+            failures.append(f"{rel(path)}: {action} sends {method} to a URI that names socradar.com: {uri[:80]}")
+        if any("override" in str(h).lower() for h in (inputs.get("headers") or {})):
+            failures.append(f"{rel(path)}: {action} sends a method-override header")
+    for resource in workflows(load(path)):
+        for name, trigger in (resource["properties"]["definition"].get("triggers") or {}).items():
+            if trigger.get("type") != "Recurrence":
+                failures.append(f"{rel(path)}: trigger {name} is {trigger.get('type')!r}, only Recurrence is expected")
+    text = open(path, encoding="utf-8").read().lower()
+    for token in ("microsoft.web/sites", "templatelink"):
+        if token in text:
+            failures.append(f"{rel(path)}: contains {token!r}, which this check does not read")
 
 # 5. The README installs and describes this repo.
 OLD_REPO = "orcunsami%2FSOCRadar-Azure-Incidents%2F"

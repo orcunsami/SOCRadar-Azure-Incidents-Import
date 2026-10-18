@@ -114,6 +114,40 @@ def nested_logic_app(t):
                                "resources": [copy.deepcopy(first_workflow(t))]}}})
 
 
+def userinfo_uri(t):
+    first_workflow(t)["properties"]["definition"]["actions"]["Zz_User"] = {
+        "type": "Http", "runAfter": {},
+        "inputs": {"method": "POST", "uri": "@{parameters('ManagementBaseUrl')}@platform.socradar.com/x"}}
+
+
+def http_trigger(t):
+    first_workflow(t)["properties"]["definition"]["triggers"]["Zz_Hook"] = {"type": "Http", "inputs": {}}
+
+
+def lowercase_type(t):
+    wf = copy.deepcopy(first_workflow(t))
+    wf["type"] = "microsoft.logic/Workflows"
+    t["resources"].append(wf)
+
+
+def web_site(t):
+    t["resources"].append({"type": "Microsoft.Web/sites", "name": "zz", "properties": {}})
+
+
+def other_connector(t):
+    first_workflow(t)["properties"]["definition"]["actions"]["Zz_Conn"] = {
+        "type": "ApiConnection", "runAfter": {},
+        "inputs": {"host": {"connection": {"name": "@parameters('$connections')['office365']['connectionId']"}},
+                   "method": "post", "path": "/x"}}
+
+
+def override_header(t):
+    first_workflow(t)["properties"]["definition"]["actions"]["Zz_Over"] = {
+        "type": "Http", "runAfter": {},
+        "inputs": {"method": "GET", "uri": "https://platform.socradar.com/api/x",
+                   "headers": {"X-HTTP-Method-Override": "POST"}}}
+
+
 def ioc_dir(root):
     os.makedirs(os.path.join(root, "Playbooks", "SOCRadar-IOC-Enrichment"))
     with open(os.path.join(root, "Playbooks", "SOCRadar-IOC-Enrichment", "azuredeploy.json"), "w") as fh:
@@ -181,6 +215,12 @@ WRITEBACK = [
     ("a write action in a Switch default branch", with_template(ROOT, switch_default_write)),
     ("a Workflow-type action", with_template(ROOT, workflow_type_action)),
     ("a Logic App hidden in a nested deployment", with_template(ROOT, nested_logic_app)),
+    ("a URI that hides socradar.com behind a user-info part", with_template(ROOT, userinfo_uri)),
+    ("an Http trigger", with_template(ROOT, http_trigger)),
+    ("a Logic App typed in lower case", with_template(ROOT, lowercase_type)),
+    ("a Microsoft.Web/sites resource", with_template(ROOT, web_site)),
+    ("an ApiConnection to another connector", with_template(ROOT, other_connector)),
+    ("a GET with a method-override header", with_template(ROOT, override_header)),
     ("an IOC-Enrichment playbook directory", ioc_dir),
     ("a lookup POST in the Import playbook", with_template(IMPORT, ioc_post_in_import)),
     ("a README Deploy button back on the old repo", readme_edit(readme_old_button)),
