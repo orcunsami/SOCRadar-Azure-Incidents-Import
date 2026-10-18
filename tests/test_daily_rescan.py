@@ -11,7 +11,8 @@ as written and not as remembered:
   - every other run                    -> the gap since the last run, as before
   - a stale checkpoint                 -> still clamped to 10080 minutes (7 days)
 
-It also checks that no parameter exposes the rescan, and that every call to SOCRadar names this
+It also checks that Direct mode stops importing while the list of existing incidents is cut short
+(the longer window would otherwise import twice), that no parameter exposes the rescan, and that every call to SOCRadar names this
 integration in the User-Agent header.
 
 Run:  python3 tests/test_daily_rescan.py
@@ -173,6 +174,16 @@ for path in FILES:
     for label, now, last, expected in CASES:
         got = evaluate(expression, now, {"LastRunUtc": last} if last else {}, PARAMS)
         check(got == expected, f"{rel(path)}: {label}: expected {expected}, got {got}")
+
+    check("less(ticks(coalesce(body('Read_Checkpoint')?['LastRunUtc'], utcNow())), ticks(concat(" in expression,
+          f"{rel(path)}: the once-a-day guard reads the checkpoint without a fallback")
+    gate = None
+    for resource in template["resources"]:
+        if resource.get("type") == "Microsoft.Logic/workflows":
+            loop = resource["properties"]["definition"]["actions"]["Pagination_Loop"]["actions"]
+            gate = loop["For_Each_Alarm"]["actions"]["Check_If_Should_Import"].get("expression")
+    check(gate is not None and {"equals": ["@variables('incidents_truncated')", False]} in gate.get("and", []),
+          f"{rel(path)}: Direct mode imports even when the list of existing incidents was cut short")
 
     names = " ".join(template.get("parameters", {})).lower()
     check("rescan" not in names, f"{rel(path)}: a parameter exposes the rescan")

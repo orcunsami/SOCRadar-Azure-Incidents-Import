@@ -393,7 +393,7 @@
                         },
                         "Determine_Lookback": {
                             "type": "Compose",
-                            "inputs": "@if(empty(coalesce(body('Read_Checkpoint')?['LastRunUtc'], '')), parameters('InitialLookbackMinutes'), min(max(add(div(sub(ticks(utcNow()), ticks(coalesce(body('Read_Checkpoint')?['LastRunUtc'], utcNow()))), 600000000), 15), max(mul(parameters('PollingIntervalMinutes'), 6), 60), if(and(greaterOrEquals(ticks(utcNow()), ticks(concat(formatDateTime(utcNow(), 'yyyy-MM-dd'), 'T09:00:00Z'))), less(ticks(body('Read_Checkpoint')?['LastRunUtc']), ticks(concat(formatDateTime(utcNow(), 'yyyy-MM-dd'), 'T09:00:00Z')))), 7200, 0)), 10080))",
+                            "inputs": "@if(empty(coalesce(body('Read_Checkpoint')?['LastRunUtc'], '')), parameters('InitialLookbackMinutes'), min(max(add(div(sub(ticks(utcNow()), ticks(coalesce(body('Read_Checkpoint')?['LastRunUtc'], utcNow()))), 600000000), 15), max(mul(parameters('PollingIntervalMinutes'), 6), 60), if(and(greaterOrEquals(ticks(utcNow()), ticks(concat(formatDateTime(utcNow(), 'yyyy-MM-dd'), 'T09:00:00Z'))), less(ticks(coalesce(body('Read_Checkpoint')?['LastRunUtc'], utcNow())), ticks(concat(formatDateTime(utcNow(), 'yyyy-MM-dd'), 'T09:00:00Z')))), 7200, 0)), 10080))",
                             "runAfter": {
                                 "Check_Checkpoint_Read": [
                                     "Succeeded"
@@ -839,6 +839,12 @@
                                                         "equals": [
                                                             "@parameters('IncidentMode')",
                                                             "Direct"
+                                                        ]
+                                                    },
+                                                    {
+                                                        "equals": [
+                                                            "@variables('incidents_truncated')",
+                                                            false
                                                         ]
                                                     }
                                                 ]

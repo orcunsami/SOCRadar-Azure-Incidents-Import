@@ -157,6 +157,20 @@ def lookback_edit(old, new):
     return with_template(ROOT, edit)
 
 
+def drop_truncated_gate(t):
+    loop = first_workflow(t)["properties"]["definition"]["actions"]["Pagination_Loop"]["actions"]
+    gate = loop["For_Each_Alarm"]["actions"]["Check_If_Should_Import"]["expression"]["and"]
+    gate[:] = [c for c in gate if "incidents_truncated" not in json.dumps(c)]
+
+
+def drop_coalesce(t):
+    actions = first_workflow(t)["properties"]["definition"]["actions"]
+    text = actions["Determine_Lookback"]["inputs"]
+    old = "ticks(coalesce(body('Read_Checkpoint')?['LastRunUtc'], utcNow())), ticks(concat("
+    assert old in text
+    actions["Determine_Lookback"]["inputs"] = text.replace(old, "ticks(body('Read_Checkpoint')?['LastRunUtc']), ticks(concat(", 1)
+
+
 def drop_user_agent(t):
     actions = first_workflow(t)["properties"]["definition"]["actions"]
     del actions["Pagination_Loop"]["actions"]["Get_SOCRadar_Page"]["inputs"]["headers"]["User-Agent"]
@@ -253,13 +267,15 @@ SUBSET = [
     ("a standalone playbook edited by hand", with_template(IMPORT, edit_standalone_playbook)),
 ]
 RESCAN = [
-    ("the once-a-day guard removed (rescan on every run)", lookback_edit("less(ticks(body('Read_Checkpoint')?['LastRunUtc'])", "greaterOrEquals(ticks(body('Read_Checkpoint')?['LastRunUtc'])")),
+    ("the once-a-day guard removed (rescan on every run)", lookback_edit("less(ticks(coalesce(body('Read_Checkpoint')?['LastRunUtc'], utcNow()))", "greaterOrEquals(ticks(coalesce(body('Read_Checkpoint')?['LastRunUtc'], utcNow()))")),
     ("the rescan window cut to 12 hours", lookback_edit("7200", "720")),
     ("the rescan hour moved to 19:00", lookback_edit("'T09:00:00Z'", "'T19:00:00Z'")),
     ("the rescan before 09:00 instead of after", lookback_edit("and(greaterOrEquals(ticks(utcNow())", "and(less(ticks(utcNow())")),
     ("the 7-day clamp removed", lookback_edit("10080", "100800")),
     ("the User-Agent dropped from a SOCRadar call", with_template(ROOT, drop_user_agent)),
     ("a parameter that exposes the rescan", with_template(ROOT, rescan_parameter)),
+    ("the truncated-list gate removed from Direct mode", with_template(ROOT, drop_truncated_gate)),
+    ("the checkpoint fallback removed from the once-a-day guard", with_template(ROOT, drop_coalesce)),
 ]
 GATES = {
     "writeback": (os.path.join("tests", "test_no_writeback.py"), WRITEBACK),
