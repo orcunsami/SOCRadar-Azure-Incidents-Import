@@ -173,6 +173,9 @@ def main():
         if rc == 0:
             print("BLIND  %-34s test still passed" % name)
             blind.append(name)
+        elif rc == 125:
+            print("CRASH  %-34s the test crashed instead of failing" % name)
+            blind.append(name)
         else:
             print("caught %-34s" % name)
     print("\nblind: %d of %d" % (len(blind), len(MUTATIONS)))
