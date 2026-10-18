@@ -26,7 +26,36 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RAW = "https://raw.githubusercontent.com/orcunsami/SOCRadar-Azure-Incidents/{ref}/{path}"
 
 # file -> [(kind, path prefix, why)]. Paths read "resources[type|name] > properties > ...".
-ALLOWED = {}
+ALLOWED = {
+    "azuredeploy.json": [
+        ('changed', 'metadata > description',
+         'the description no longer promises a write-back'),
+        ('removed', 'outputs > syncLogicAppName',
+         'there is no Sync Logic App to name'),
+        ('removed', 'parameters > SyncSeverity',
+         'there is no severity write-back to switch'),
+        ('removed', "resources > [Microsoft.Authorization/roleAssignments|[guid(variables('workspaceResourceId'), variables('SyncPlaybookName'), variables('sentinelRoleDefinitionId'))]]",
+         'the Sync identity needs no role'),
+        ('changed', "resources > [Microsoft.Insights/workbooks|[guid(resourceGroup().id, 'SOCRadar-Workbook')]] > properties > serializedData",
+         'the dashboard header no longer mentions sync status'),
+        ('changed', "resources > [Microsoft.Logic/workflows|[variables('ImportPlaybookName')]] > properties > definition > actions > Pagination_Loop > actions > For_Each_Alarm > actions > Check_If_Should_Import > actions > Check_If_Already_Exists > else > actions > Check_If_Open_Status > else > actions > Build_Labels > inputs",
+         'a closed alarm is imported without the Synced label, which only told Sync to leave it alone'),
+        ('removed', "resources > [Microsoft.Logic/workflows|[variables('SyncPlaybookName')]]",
+         'the Sync Logic App is not part of this repo'),
+        ('changed', "resources > [Microsoft.OperationalInsights/workspaces/savedSearches|[concat(parameters('WorkspaceName'), '/SOCRadar_Hunting_Query_5')]] > properties > tags",
+         'the saved-search tag no longer mentions sync operations'),
+        ('changed', "resources > [Microsoft.OperationalInsights/workspaces/tables|[concat(parameters('WorkspaceName'), '/', variables('AuditTableName'))]] > properties > schema > columns > [string|EventType] > description",
+         'AlarmSynced is not an audit event type any more'),
+        ('changed', 'resources > [Microsoft.Resources/deployments|deploy-workspace-roles] > dependsOn',
+         'it no longer waits for the Sync Logic App'),
+        ('removed', "resources > [Microsoft.Resources/deployments|deploy-workspace-roles] > properties > template > resources > [Microsoft.Authorization/roleAssignments|[guid(variables('workspaceResourceId'), variables('SyncPlaybookName'), variables('sentinelRoleDefinitionId'))]]",
+         'the Sync identity needs no workspace role'),
+        ('changed', 'resources > [Microsoft.Resources/deployments|precheck-workspace-exists] > comments',
+         'the comment no longer lists the Sync playbook'),
+        ('removed', 'variables > SyncPlaybookName',
+         'the name of a Logic App that is gone'),
+    ],
+}
 
 SEP = " > "
 
