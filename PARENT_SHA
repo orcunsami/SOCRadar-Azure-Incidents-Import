@@ -1,0 +1,3 @@
+# Parent repo orcunsami/SOCRadar-Azure-Incidents, the commit this repo was cut from.
+# tools/check_parent_subset.py compares every template here against it. Bump on purpose.
+6895d3e75dc36734167ca2178f517522d25b2d49
