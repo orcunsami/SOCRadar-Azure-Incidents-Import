@@ -15,8 +15,8 @@ shape and never runs a workflow action.
 | `../tools/check_template_drift.py` | The standalone playbooks have not fallen behind `azuredeploy.json` |
 | `../tools/check_analytic_rules.py` | The shipped analytic rules are well formed |
 | `test_checkpoint.py` | The import window comes from the storage checkpoint, not from incident titles: the account's name and security properties, the role assignment's scope, the GET/PUT headers Table Storage requires, and that the checkpoint is written only after a complete read |
-| `test_no_writeback.py` | The deployable template carries one Logic App, every call to SOCRadar is a GET (bar one read-only IOC lookup), and no Sync string is left anywhere |
-| `../tools/check_parent_subset.py` | Every template is the parent repo's template at `PARENT_SHA` minus the documented Sync differences, so a hand edit or a stale copy shows up |
+| `test_no_writeback.py` | The deployable template carries one Logic App, every call to SOCRadar is a GET, and no write-back string is left in any template |
+| `../tools/check_parent_subset.py` | Every template is the parent repo's template at `PARENT_SHA` minus the documented differences, so a hand edit or a stale copy shows up |
 | `test_management_base_url.py` | No template hardcodes the public-cloud ARM host |
 | `test_hunting_queries.py` | Every column the hunting queries read is one the deployment creates |
 | `test_cross_rg_roles.py` | The cross-RG nested role assignments grant the import identity the same elevated role the same-RG path grants, so IoC enrichment does not silently 403 when the workspace lives in another resource group |

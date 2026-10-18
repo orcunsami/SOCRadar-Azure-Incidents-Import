@@ -3,8 +3,7 @@
 
 An 11-agent pre-delivery audit found ways this import could lose alarms or create
 duplicates while every log line still said the run succeeded. Each is now guarded, and
-each guard is pinned here so a later edit cannot quietly take it away. (A fourth, S5, was
-the Sync playbook's and is not part of this repo.)
+each guard is pinned here so a later edit cannot quietly take it away. (A fourth, S5, does not apply to this repo.)
 
   S2  Pagination_Loop_Incidents is an Until with a limit. If it stops on the limit rather
       than an empty nextLink, the existing-incident list is partial and the run re-creates

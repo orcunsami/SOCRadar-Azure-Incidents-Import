@@ -57,7 +57,7 @@ jobs:
       - name: Nothing is written back to SOCRadar
         run: python3 tests/test_no_writeback.py
 
-      - name: Templates are the parent's templates minus the Sync half
+      - name: Templates are the parent's templates minus the documented differences
         run: python3 tools/check_parent_subset.py
 
       - name: ARM host comes from environment(), never a literal

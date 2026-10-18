@@ -9,8 +9,7 @@ read that title, and an analytics rule that produces incidents with a different 
 puts the playbook on the initial 600-minute window for the rest of its life.
 
 The window now comes from a row in Azure Table Storage that the run writes itself,
-and the alarm id also rides on the incident as a label so the sync playbook no longer
-has to parse the title to find it. Both replacements have a failure mode that only
+and the alarm id also rides on the incident as a label, so nothing has to parse the title to find it. Both replacements have a failure mode that only
 appears at run time:
 
   - the checkpoint row does not exist on the first run of a fresh deployment, so the
