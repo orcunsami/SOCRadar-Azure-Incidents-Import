@@ -157,6 +157,12 @@ def lookback_edit(old, new):
     return with_template(ROOT, edit)
 
 
+def open_filter_edit(t):
+    loop = first_workflow(t)["properties"]["definition"]["actions"]["Pagination_Loop"]["actions"]
+    gate = loop["For_Each_Alarm"]["actions"]["Check_If_Should_Import"]["expression"]["and"]
+    gate[0] = json.loads(json.dumps(gate[0]).replace('"OPEN"', '"ZZZ"'))
+
+
 def drop_truncated_gate(t):
     loop = first_workflow(t)["properties"]["definition"]["actions"]["Pagination_Loop"]["actions"]
     gate = loop["For_Each_Alarm"]["actions"]["Check_If_Should_Import"]["expression"]["and"]
@@ -275,6 +281,8 @@ RESCAN = [
     ("the User-Agent dropped from a SOCRadar call", with_template(ROOT, drop_user_agent)),
     ("a parameter that exposes the rescan", with_template(ROOT, rescan_parameter)),
     ("the truncated-list gate removed from Direct mode", with_template(ROOT, drop_truncated_gate)),
+    ("the open-alarm filter edited so closed alarms import", with_template(ROOT, open_filter_edit)),
+    ("the polling floor shrunk from six intervals to one", lookback_edit("max(mul(parameters('PollingIntervalMinutes'), 6), 60)", "max(parameters('PollingIntervalMinutes'), 60)")),
     ("the checkpoint fallback removed from the once-a-day guard", with_template(ROOT, drop_coalesce)),
 ]
 GATES = {

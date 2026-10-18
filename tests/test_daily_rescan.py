@@ -117,7 +117,7 @@ def evaluate(expression, now, checkpoint, params):
             "utcNow": lambda: now,
             "body": lambda n: checkpoint if n == "Read_Checkpoint" else {},
             "parameters": lambda n: params[n],
-            "coalesce": lambda *xs: next((x for x in xs if x not in (None, "")), None),
+            "coalesce": lambda *xs: next((x for x in xs if x is not None), None),
             "empty": lambda x: x in (None, "", {}, []),
             "min": lambda *xs: min(xs), "max": lambda *xs: max(xs),
             "add": lambda x, y: x + y, "sub": lambda x, y: x - y,
@@ -153,7 +153,15 @@ def stamp(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%S.") + "0000000Z"
 
 
+EXPECTED_GATE = {"and": [
+    {"or": [{"equals": ["@parameters('ImportAllStatuses')", True]},
+            {"equals": ["@coalesce(items('For_Each_Alarm')?['status'], 'OPEN')", "OPEN"]}]},
+    {"equals": ["@parameters('IncidentMode')", "Direct"]},
+    {"equals": ["@variables('incidents_truncated')", False]},
+]}
+
 PARAMS = {"InitialLookbackMinutes": 600, "PollingIntervalMinutes": 5}
+SLOW = {"InitialLookbackMinutes": 600, "PollingIntervalMinutes": 15}
 
 # (label, now, LastRunUtc or None, expected minutes)
 CASES = [
@@ -167,6 +175,12 @@ CASES = [
     ("a three-day-old checkpoint rescans 5 days, not 3", day(12, 0), stamp(day(12, 0, back=3)), 7200),
     ("an eight-day-old checkpoint is clamped to 7 days", day(12, 0), stamp(day(12, 0, back=8)), 10080),
     ("a normal run keeps the gap plus 15 minutes", day(15, 0), stamp(day(10, 0)), 315),
+    ("an empty checkpoint value counts as no checkpoint", day(9, 0, 30), "", 600),
+]
+# At a 15 minute interval the floor is six intervals (90), not 60 or 15.
+CASES_SLOW = [
+    ("slow polling: a normal run keeps the six-interval floor", day(15, 5), stamp(day(15, 0)), 90),
+    ("slow polling: the rescan still reaches back 5 days", day(9, 10), stamp(day(8, 55)), 7200),
 ]
 
 for path in FILES:
@@ -182,8 +196,13 @@ for path in FILES:
         if resource.get("type") == "Microsoft.Logic/workflows":
             loop = resource["properties"]["definition"]["actions"]["Pagination_Loop"]["actions"]
             gate = loop["For_Each_Alarm"]["actions"]["Check_If_Should_Import"].get("expression")
-    check(gate is not None and {"equals": ["@variables('incidents_truncated')", False]} in gate.get("and", []),
-          f"{rel(path)}: Direct mode imports even when the list of existing incidents was cut short")
+    check(gate == EXPECTED_GATE,
+          f"{rel(path)}: Check_If_Should_Import is not the expected gate (open alarms or ImportAllStatuses, "
+          f"Direct mode, list of existing incidents complete): {json.dumps(gate)[:200]}")
+
+    for label, now, last, expected in CASES_SLOW:
+        got = evaluate(expression, now, {"LastRunUtc": last} if last else {}, SLOW)
+        check(got == expected, f"{rel(path)}: {label}: expected {expected}, got {got}")
 
     names = " ".join(template.get("parameters", {})).lower()
     check("rescan" not in names, f"{rel(path)}: a parameter exposes the rescan")
