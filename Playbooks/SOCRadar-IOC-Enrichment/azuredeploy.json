@@ -19,7 +19,7 @@
         "SocradarApiKey": {
             "type": "securestring",
             "metadata": {
-                "description": "SOCRadar API Key (same key used by SOCRadar-Alarm-Import / SOCRadar-Alarm-Sync). Used here to fetch the original alarm's related entities. Also used for IOC enrichment if SocradarIocApiKey is left empty."
+                "description": "SOCRadar API Key (same key used by SOCRadar-Alarm-Import). Used here to fetch the original alarm's related entities. Also used for IOC enrichment if SocradarIocApiKey is left empty."
             }
         },
         "SocradarIocApiKey": {

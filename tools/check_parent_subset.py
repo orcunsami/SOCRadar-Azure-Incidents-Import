@@ -27,7 +27,7 @@ RAW = "https://raw.githubusercontent.com/orcunsami/SOCRadar-Azure-Incidents/{ref
 
 # file -> [(kind, path prefix, why)]. Paths read "resources[type|name] > properties > ...".
 ALLOWED = {
-    "azuredeploy.json": [
+    'azuredeploy.json': [
         ('changed', 'metadata > description',
          'the description no longer promises a write-back'),
         ('removed', 'outputs > syncLogicAppName',
@@ -54,6 +54,22 @@ ALLOWED = {
          'the comment no longer lists the Sync playbook'),
         ('removed', 'variables > SyncPlaybookName',
          'the name of a Logic App that is gone'),
+    ],
+    'Playbooks/SOCRadar-Alarm-Import/azuredeploy.json': [
+        ('changed', "resources > [Microsoft.Logic/workflows|[parameters('PlaybookName')]] > properties > definition > actions > Pagination_Loop > actions > For_Each_Alarm > actions > Check_If_Should_Import > actions > Check_If_Already_Exists > else > actions > Check_If_Open_Status > else > actions > Build_Labels > inputs",
+         'a closed alarm is imported without the Synced label, which only told Sync to leave it alone'),
+    ],
+    'Playbooks/SOCRadar-Audit-Infrastructure/azuredeploy.json': [
+        ('changed', "resources > [Microsoft.OperationalInsights/workspaces/tables|[concat(parameters('WorkspaceName'), '/SOCRadarAuditLog_CL')]] > properties > schema > columns > [string|EventType] > description",
+         'AlarmSynced is not an audit event type any more'),
+    ],
+    'Playbooks/SOCRadar-IOC-Enrichment/azuredeploy.json': [
+        ('changed', 'parameters > SocradarApiKey > metadata > description',
+         'the key is no longer shared with a Sync Logic App'),
+    ],
+    'Playbooks/SOCRadar-Workbook/azuredeploy.json': [
+        ('changed', "resources > [Microsoft.Insights/workbooks|[guid(resourceGroup().id, variables('WorkbookName'))]] > properties > serializedData",
+         'the dashboard header no longer mentions sync status'),
     ],
 }
 

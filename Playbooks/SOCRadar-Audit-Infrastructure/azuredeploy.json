@@ -50,7 +50,7 @@
                     "name": "SOCRadarAuditLog_CL",
                     "columns": [
                         { "name": "TimeGenerated", "type": "datetime", "description": "Event timestamp" },
-                        { "name": "EventType", "type": "string", "description": "Type: AlarmImported, AlarmSynced, Error" },
+                        { "name": "EventType", "type": "string", "description": "Type: AlarmImported, Error" },
                         { "name": "AlarmId", "type": "string", "description": "SOCRadar alarm ID" },
                         { "name": "IncidentId", "type": "string", "description": "Microsoft Sentinel incident ID" },
                         { "name": "AlarmType", "type": "string", "description": "Main alarm type" },

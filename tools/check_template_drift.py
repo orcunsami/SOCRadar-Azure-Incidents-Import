@@ -7,19 +7,8 @@ templates hold two hand-maintained copies of the same logic; they can silently d
 apart. This check compares the expressions that carry the behaviour and exits
 non-zero when they stop matching.
 
-History of the write-guard check (corrected 2026-09-04):
-  - An earlier note here claimed this repo's sync playbook had no named
-    "Check_SOCRadar_Write_Succeeded" condition action, and the guard check was
-    replaced with a comparison of Add_Synced_Tag's runAfter. That claim was wrong.
-    The action does exist, in both the one-click template and the standalone
-    playbook, at For_Each_Incident/Check_If_Closed_And_Not_Synced/
-    Check_SOCRadar_Write_Succeeded, and Add_Synced_Tag sits inside it. The
-    replacement check compared an empty runAfter with an empty runAfter, so it
-    could never fail. The original expression comparison is restored below and the
-    placement check now names the guard itself.
-
 Adaptation notes:
-  - This repo has a 7th template, Playbooks/SOCRadar-IOC-Enrichment/azuredeploy.json,
+  - This repo has a 6th template, Playbooks/SOCRadar-IOC-Enrichment/azuredeploy.json,
     with no counterpart in azuredeploy.json (it is deployed separately because it
     needs its own IoC API key). It is intentionally excluded from the root-vs-standalone
     comparisons below -- there is nothing in root to diff it against. It is still
@@ -36,13 +25,12 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.join(REPO, "azuredeploy.json")
 IMPORT = os.path.join(REPO, "Playbooks", "SOCRadar-Alarm-Import", "azuredeploy.json")
-SYNC = os.path.join(REPO, "Playbooks", "SOCRadar-Alarm-Sync", "azuredeploy.json")
 ALARMS_INFRA = os.path.join(REPO, "Playbooks", "SOCRadar-Alarms-Infrastructure", "azuredeploy.json")
 AUDIT_INFRA = os.path.join(REPO, "Playbooks", "SOCRadar-Audit-Infrastructure", "azuredeploy.json")
 
 # Every azuredeploy.json in the repo, including the ones not compared below
 # (IOC-Enrichment has no root counterpart, Workbook has no workflow/DCR to drift).
-ALL_TEMPLATES = [ROOT, IMPORT, SYNC, ALARMS_INFRA, AUDIT_INFRA,
+ALL_TEMPLATES = [ROOT, IMPORT, ALARMS_INFRA, AUDIT_INFRA,
                   os.path.join(REPO, "Playbooks", "SOCRadar-IOC-Enrichment", "azuredeploy.json"),
                   os.path.join(REPO, "Playbooks", "SOCRadar-Workbook", "azuredeploy.json")]
 
@@ -64,20 +52,12 @@ def walk_actions(actions, prefix=""):
     return found
 
 
-def workflow_actions(template, want_sync=None):
-    """Collect actions from the workflows in a template.
-
-    want_sync None -> every workflow; True -> only the sync playbook; False -> only import.
-    The sync playbook is the one that writes back to SOCRadar.
-    """
+def workflow_actions(template):
+    """Collect the actions of every workflow in a template. There is one: the import."""
     collected = {}
     for resource in template.get("resources", []):
-        if resource.get("type") != "Microsoft.Logic/workflows":
-            continue
-        actions = walk_actions(resource["properties"]["definition"]["actions"])
-        is_sync = any(k.split("/")[-1] == "Update_SOCRadar_Status" for k in actions)
-        if want_sync is None or is_sync == want_sync:
-            collected.update(actions)
+        if resource.get("type") == "Microsoft.Logic/workflows":
+            collected.update(walk_actions(resource["properties"]["definition"]["actions"]))
     return collected
 
 
@@ -166,10 +146,8 @@ def unbounded_result_payloads(template):
 
 def main():
     root = load(ROOT)
-    root_import = workflow_actions(root, want_sync=False)
-    root_sync = workflow_actions(root, want_sync=True)
+    root_import = workflow_actions(root)
     mod_import = workflow_actions(load(IMPORT))
-    mod_sync = workflow_actions(load(SYNC))
 
     failures = []
 
@@ -187,8 +165,8 @@ def main():
             failures.append(f"{label}: differs\n    root:       {str(left)[:200]}\n    standalone: {str(right)[:200]}")
 
     # Import playbook behaviour that has drifted before. Build_Labels is here because the
-    # incident's labels are what the sync playbook reads back, so a one-sided change to it
-    # silently breaks the return path.
+    # incident's labels are what the hunting queries and any later write-back read, so a
+    # one-sided change to it silently breaks them.
     for name in ("Determine_Lookback", "Extract_Existing_IDs", "Calculate_Epoch_Start",
                  "Build_Labels", "Build_Tags"):
         compare(name, action_field(root_import, name, "inputs"), action_field(mod_import, name, "inputs"))
@@ -240,61 +218,8 @@ def main():
             failures.append(f"Write_Checkpoint: does not run only after Import_Complete succeeded in the "
                             f"{label} import playbook (runAfter={json.dumps(after)})")
 
-    # Sync playbook: the write bodies must stay identical on both sides.
-    for name in ("Update_SOCRadar_Status", "Update_SOCRadar_Severity"):
-        compare(name + " body", request_body(root_sync, name), request_body(mod_sync, name))
-
-    # Sync playbook: the gate around the severity write-back. Microsoft Sentinel has no Critical
-    # severity, so an ungated write-back lowers a SOCRadar CRITICAL alarm to High on every close.
-    # A one-sided change here would leave one copy gated and the other not.
-    compare(
-        "Check_Severity_Sync_Enabled",
-        action_field(root_sync, "Check_Severity_Sync_Enabled", "expression"),
-        action_field(mod_sync, "Check_Severity_Sync_Enabled", "expression"),
-    )
-
-    # Update_SOCRadar_Severity must sit inside that gate on both sides.
-    for label, actions in (("root", root_sync), ("standalone", mod_sync)):
-        placed = [k for k in actions if k.split("/")[-1] == "Update_SOCRadar_Severity"]
-        if not placed:
-            failures.append(f"Update_SOCRadar_Severity: not found in the {label} sync playbook")
-        elif "Check_Severity_Sync_Enabled" not in placed[0]:
-            failures.append(
-                f"Update_SOCRadar_Severity: not inside Check_Severity_Sync_Enabled in the "
-                f"{label} sync playbook ({placed[0]})"
-            )
-
-    # Sync playbook: the guard that stops a failed SOCRadar write from being marked as
-    # synced. Both sides must carry the same condition expression.
-    compare(
-        "Check_SOCRadar_Write_Succeeded",
-        action_field(root_sync, "Check_SOCRadar_Write_Succeeded", "expression"),
-        action_field(mod_sync, "Check_SOCRadar_Write_Succeeded", "expression"),
-    )
-
-    # Add_Synced_Tag's runAfter must also match, so a change to the ordering mechanism
-    # on only one side is caught alongside the expression.
-    compare(
-        "Add_Synced_Tag runAfter",
-        run_after(root_sync, "Add_Synced_Tag"),
-        run_after(mod_sync, "Add_Synced_Tag"),
-    )
-
-    # Add_Synced_Tag must sit inside the write-succeeded guard on both sides. Naming the
-    # guard itself is the point: a tag placed under Check_If_Closed_And_Not_Synced but
-    # outside Check_SOCRadar_Write_Succeeded would mark a failed write as synced.
-    for label, actions in (("root", root_sync), ("standalone", mod_sync)):
-        placed = [k for k in actions if k.split("/")[-1] == "Add_Synced_Tag"]
-        if not placed:
-            failures.append(f"Add_Synced_Tag: not found in the {label} sync playbook")
-        elif "Check_SOCRadar_Write_Succeeded" not in placed[0]:
-            failures.append(
-                f"Add_Synced_Tag: not inside Check_SOCRadar_Write_Succeeded in the "
-                f"{label} sync playbook ({placed[0]})"
-            )
-
     # Alert-backed mode (task_azure_0051): the sequential loop, its mode gate, the checkpoint
-    # hold and the Sync entity reader are one behaviour in two hand-maintained copies.
+    # hold are one behaviour in two hand-maintained copies.
     compare("Check_If_Should_Import", action_field(root_import, "Check_If_Should_Import", "expression"),
             action_field(mod_import, "Check_If_Should_Import", "expression"))
     for field in ("actions", "runtimeConfiguration", "foreach", "runAfter"):
@@ -305,13 +230,6 @@ def main():
             action_field(mod_import, "Verify_Import_Complete", "expression"))
     compare("Fail_Incomplete_Import", action_field(root_import, "Fail_Incomplete_Import", "inputs"),
             action_field(mod_import, "Fail_Incomplete_Import", "inputs"))
-    compare("Check_Needs_Entity_Lookup", action_field(root_sync, "Check_Needs_Entity_Lookup", "expression"),
-            action_field(mod_sync, "Check_Needs_Entity_Lookup", "expression"))
-    for name in ("Get_Incident_Entities", "Filter_Alarm_Url_Entities", "Alarm_ID_From_Entities", "Resolve_Alarm_ID"):
-        compare(name, action_field(root_sync, name, "inputs"), action_field(mod_sync, name, "inputs"))
-    compare("Check_If_Closed_And_Not_Synced runAfter", run_after(root_sync, "Check_If_Closed_And_Not_Synced"),
-            run_after(mod_sync, "Check_If_Closed_And_Not_Synced"))
-
     # The analytics rule and its automation rule live in a nested template in both copies.
     def nested_rule(template):
         for resource in template.get("resources", []):
@@ -397,7 +315,7 @@ def main():
     # one-click path with one typo in it, and until task_azure_0057 it half-installed: ARM
     # counts a condition:false resource as a satisfied dependency, so depending on the
     # workspace resource stopped nothing. The storage account, the data collection
-    # endpoint, the API connection, the workbook and the Sync playbook were all created
+    # endpoint, the API connection, the workbook and the import playbook were all created
     # and only then did the deployment fail. A nested deployment that resolves the
     # existing workspace has to run first, and everything else has to wait on it.
     GUARD = "precheck-workspace-exists"
@@ -525,10 +443,10 @@ def main():
             if "core.windows.net" in line:
                 failures.append(f"{rel}:{lineno}: hardcoded storage host - use environment().suffixes.storage")
 
-    # The variable that resolves the ARM host has to be identical in all three templates
+    # The variable that resolves the ARM host has to be identical in both templates
     # that build ARM URLs, or one copy silently keeps talking to the wrong cloud.
     base_expressions = {}
-    for path in (ROOT, IMPORT, SYNC):
+    for path in (ROOT, IMPORT):
         base_expressions[os.path.relpath(path, REPO)] = load(path).get("variables", {}).get("managementBaseUrl")
     if None in base_expressions.values() or len(set(base_expressions.values())) != 1:
         failures.append("managementBaseUrl is missing or differs between templates: "
@@ -537,7 +455,7 @@ def main():
     # A workflow that builds an ARM URL at run time reads the host from a workflow
     # parameter. An undeclared or unsupplied parameter makes the whole definition invalid,
     # and a declared-but-unused one means the URLs went back to a literal.
-    for path in (ROOT, IMPORT, SYNC):
+    for path in (ROOT, IMPORT):
         rel = os.path.relpath(path, REPO)
         for resource in load(path).get("resources", []):
             if resource.get("type") != "Microsoft.Logic/workflows":
@@ -563,7 +481,7 @@ def main():
 
     # And the workflow parameter that carries it has to be declared, supplied and used
     # together - the same three-way check the ARM host parameter gets.
-    for path in (ROOT, IMPORT, SYNC):
+    for path in (ROOT, IMPORT):
         rel = os.path.relpath(path, REPO)
         for resource in load(path).get("resources", []):
             if resource.get("type") != "Microsoft.Logic/workflows":
@@ -579,7 +497,7 @@ def main():
                 failures.append(f"{rel}: CheckpointTableUrl is declared but no action uses it")
 
     # Bounded retries and loops, so a failing API call cannot stall the integration.
-    # Swept across every template in the repo (not just root/import/sync) -- this is a
+    # Swept across every template in the repo (not just root/import) -- this is a
     # cheap regression net and IOC-Enrichment also calls an external API.
     for path in ALL_TEMPLATES:
         raw = open(path).read()

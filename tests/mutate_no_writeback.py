@@ -140,7 +140,8 @@ GATES = {
 def run(root, script):
     proc = subprocess.run([sys.executable, "-B", "-I", os.path.join(root, script)],
                           capture_output=True, text=True, timeout=180)
-    return proc.returncode
+    # A crash also exits 1. Only the gate's own verdict line counts as a catch.
+    return proc.returncode, ("CHECK FAILED" in proc.stdout)
 
 
 def fresh_copy():
@@ -158,7 +159,7 @@ def main():
             continue
         tmp, dst = fresh_copy()
         try:
-            base = run(dst, script)
+            base, _ = run(dst, script)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         if base != 0:
@@ -168,11 +169,11 @@ def main():
             tmp, dst = fresh_copy()
             try:
                 apply(dst)
-                rc = run(dst, script)
+                rc, verdict = run(dst, script)
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
-            caught = rc not in (0,)
-            print(f"[{name}] {'caught' if caught else 'SURVIVED'}  {label} (rc={rc})")
+            caught = rc == 1 and verdict
+            print(f"[{name}] {'caught' if caught else 'SURVIVED'}  {label} (rc={rc}, verdict line={verdict})")
             if not caught:
                 blind.append(f"{name}: {label}")
     if blind:

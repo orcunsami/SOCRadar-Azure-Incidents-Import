@@ -49,7 +49,7 @@ SOCRadar_Alarms_CL
     AlarmDate,
     IncidentCreated = CreatedTime
 
-// Find alarms without incidents (potential sync issues)
+// Find alarms without incidents (potential import issues)
 SOCRadar_Alarms_CL
 | where TimeGenerated > ago(24h)
 | where Status == "OPEN"
