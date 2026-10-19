@@ -1,0 +1,523 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0",
+  "parameters": {
+    "WorkspaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "Log Analytics workspace name."
+      }
+    },
+    "DeployNewWorkspace": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "true creates the workspace and enables Microsoft Sentinel on it. false uses an existing Microsoft Sentinel workspace in this resource group."
+      }
+    },
+    "SocradarApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "SOCRadar Company API key."
+      }
+    },
+    "CompanyId": {
+      "type": "string",
+      "metadata": {
+        "description": "SOCRadar Company ID."
+      }
+    },
+    "PageSize": {
+      "type": "int",
+      "defaultValue": 100,
+      "minValue": 1,
+      "maxValue": 100,
+      "metadata": {
+        "description": "Alarms per request."
+      }
+    },
+    "TableRetentionDays": {
+      "type": "int",
+      "defaultValue": 90,
+      "minValue": 4,
+      "maxValue": 730
+    }
+  },
+  "variables": {
+    "location": "[resourceGroup().location]",
+    "tableName": "SOCRadar_Alarms_CL",
+    "dceName": "SOCRadar-DCE",
+    "dcrName": "SOCRadar-Alarms-CCF-DCR",
+    "definitionName": "SOCRadarAlarmsCCFConnector",
+    "connectorName": "[concat('SOCRadarAlarms', uniqueString(resourceGroup().id))]",
+    "ruleId": "[guid(resourceId('Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName')), 'socradar-alert-backed-rule')]",
+    "automationRuleId": "[guid(resourceId('Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName')), 'socradar-alert-backed-automation-rule')]"
+  },
+  "resources": [
+    {
+      "condition": "[parameters('DeployNewWorkspace')]",
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[parameters('WorkspaceName')]",
+      "location": "[variables('location')]",
+      "properties": {}
+    },
+    {
+      "condition": "[parameters('DeployNewWorkspace')]",
+      "type": "Microsoft.OperationsManagement/solutions",
+      "apiVersion": "2015-11-01-preview",
+      "name": "[concat('SecurityInsights(', parameters('WorkspaceName'), ')')]",
+      "location": "[variables('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]"
+      ],
+      "plan": {
+        "name": "[concat('SecurityInsights(', parameters('WorkspaceName'), ')')]",
+        "publisher": "Microsoft",
+        "product": "OMSGallery/SecurityInsights",
+        "promotionCode": ""
+      },
+      "properties": {
+        "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]"
+      }
+    },
+    {
+      "condition": "[parameters('DeployNewWorkspace')]",
+      "type": "Microsoft.OperationalInsights/workspaces/providers/onboardingStates",
+      "apiVersion": "2024-03-01",
+      "name": "[concat(parameters('WorkspaceName'), '/Microsoft.SecurityInsights/default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationsManagement/solutions', concat('SecurityInsights(', parameters('WorkspaceName'), ')'))]"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/tables",
+      "apiVersion": "2022-10-01",
+      "name": "[concat(parameters('WorkspaceName'), '/', variables('tableName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/providers/onboardingStates', parameters('WorkspaceName'), 'Microsoft.SecurityInsights', 'default')]"
+      ],
+      "properties": {
+        "retentionInDays": "[parameters('TableRetentionDays')]",
+        "schema": {
+          "name": "[variables('tableName')]",
+          "columns": [
+            {
+              "name": "TimeGenerated",
+              "type": "datetime"
+            },
+            {
+              "name": "AlarmId",
+              "type": "string"
+            },
+            {
+              "name": "CompanyId",
+              "type": "string"
+            },
+            {
+              "name": "AlarmMainType",
+              "type": "string"
+            },
+            {
+              "name": "AlarmSubType",
+              "type": "string"
+            },
+            {
+              "name": "Severity",
+              "type": "string"
+            },
+            {
+              "name": "Status",
+              "type": "string"
+            },
+            {
+              "name": "Title",
+              "type": "string"
+            },
+            {
+              "name": "AlarmText",
+              "type": "string"
+            },
+            {
+              "name": "AlarmDate",
+              "type": "string"
+            },
+            {
+              "name": "AlarmPayload",
+              "type": "dynamic"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionEndpoints",
+      "apiVersion": "2023-03-11",
+      "name": "[variables('dceName')]",
+      "location": "[variables('location')]",
+      "properties": {
+        "networkAcls": {
+          "publicNetworkAccess": "Enabled"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionRules",
+      "apiVersion": "2023-03-11",
+      "name": "[variables('dcrName')]",
+      "location": "[variables('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/dataCollectionEndpoints', variables('dceName'))]",
+        "[resourceId('Microsoft.OperationalInsights/workspaces/tables', parameters('WorkspaceName'), variables('tableName'))]"
+      ],
+      "properties": {
+        "dataCollectionEndpointId": "[resourceId('Microsoft.Insights/dataCollectionEndpoints', variables('dceName'))]",
+        "streamDeclarations": {
+          "Custom-SOCRadar_Alarms_CL": {
+            "columns": [
+              {
+                "name": "alarm_id",
+                "type": "long"
+              },
+              {
+                "name": "alarm_asset",
+                "type": "string"
+              },
+              {
+                "name": "alarm_risk_level",
+                "type": "string"
+              },
+              {
+                "name": "alarm_text",
+                "type": "string"
+              },
+              {
+                "name": "alarm_response",
+                "type": "string"
+              },
+              {
+                "name": "status",
+                "type": "string"
+              },
+              {
+                "name": "date",
+                "type": "string"
+              },
+              {
+                "name": "last_notification_date",
+                "type": "string"
+              },
+              {
+                "name": "notification_id",
+                "type": "string"
+              },
+              {
+                "name": "approved_by",
+                "type": "string"
+              },
+              {
+                "name": "is_approved",
+                "type": "boolean"
+              },
+              {
+                "name": "alarm_type_details",
+                "type": "dynamic"
+              },
+              {
+                "name": "alarm_related_entities",
+                "type": "dynamic"
+              },
+              {
+                "name": "alarm_related_assets",
+                "type": "dynamic"
+              },
+              {
+                "name": "alarm_assignees",
+                "type": "dynamic"
+              },
+              {
+                "name": "content",
+                "type": "dynamic"
+              },
+              {
+                "name": "extra",
+                "type": "dynamic"
+              },
+              {
+                "name": "history",
+                "type": "dynamic"
+              },
+              {
+                "name": "notes",
+                "type": "dynamic"
+              },
+              {
+                "name": "tags",
+                "type": "dynamic"
+              }
+            ]
+          }
+        },
+        "destinations": {
+          "logAnalytics": [
+            {
+              "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
+              "name": "clv2ws1"
+            }
+          ]
+        },
+        "dataFlows": [
+          {
+            "streams": [
+              "Custom-SOCRadar_Alarms_CL"
+            ],
+            "destinations": [
+              "clv2ws1"
+            ],
+            "transformKql": "[replace('source | extend TimeGenerated = now(), AlarmId = tostring(alarm_id), CompanyId = tostring(\"@@\"), AlarmMainType = tostring(alarm_type_details.alarm_main_type), AlarmSubType = tostring(alarm_type_details.alarm_sub_type), Severity = alarm_risk_level, Status = status, Title = tostring(alarm_type_details.alarm_generic_title), AlarmText = alarm_text, AlarmDate = [\"date\"], AlarmPayload = pack_all() | project TimeGenerated, AlarmId, CompanyId, AlarmMainType, AlarmSubType, Severity, Status, Title, AlarmText, AlarmDate, AlarmPayload', '@@', parameters('CompanyId'))]",
+            "outputStream": "Custom-SOCRadar_Alarms_CL"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/dataConnectorDefinitions",
+      "apiVersion": "2022-09-01-preview",
+      "name": "[concat(parameters('WorkspaceName'), '/Microsoft.SecurityInsights/', variables('definitionName'))]",
+      "location": "[variables('location')]",
+      "kind": "Customizable",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/providers/onboardingStates', parameters('WorkspaceName'), 'Microsoft.SecurityInsights', 'default')]"
+      ],
+      "properties": {
+        "connectorUiConfig": {
+          "id": "[variables('definitionName')]",
+          "title": "SOCRadar Alarms",
+          "publisher": "SOCRadar",
+          "descriptionMarkdown": "Ingests SOCRadar alarms into the SOCRadar_Alarms_CL table. Sentinel polls the SOCRadar API itself, no Logic App or Function App is deployed.",
+          "graphQueriesTableName": "[variables('tableName')]",
+          "graphQueries": [
+            {
+              "metricName": "Alarms received",
+              "legend": "SOCRadar alarms",
+              "baseQuery": "SOCRadar_Alarms_CL"
+            }
+          ],
+          "sampleQueries": [
+            {
+              "description": "Latest alarms",
+              "query": "SOCRadar_Alarms_CL | sort by TimeGenerated desc | take 50"
+            }
+          ],
+          "dataTypes": [
+            {
+              "name": "SOCRadar_Alarms_CL",
+              "lastDataReceivedQuery": "SOCRadar_Alarms_CL | summarize Time = max(TimeGenerated) | where isnotempty(Time)"
+            }
+          ],
+          "connectivityCriteria": [
+            {
+              "type": "HasDataConnectors"
+            }
+          ],
+          "availability": {
+            "isPreview": false
+          },
+          "permissions": {
+            "resourceProvider": [
+              {
+                "provider": "Microsoft.OperationalInsights/workspaces",
+                "permissionsDisplayText": "Read and Write permissions are required.",
+                "providerDisplayName": "Workspace",
+                "scope": "Workspace",
+                "requiredPermissions": {
+                  "write": true,
+                  "read": true,
+                  "delete": true,
+                  "action": false
+                }
+              }
+            ]
+          },
+          "instructionSteps": [
+            {
+              "title": "Connection",
+              "description": "The connection is created by the deployment template.",
+              "instructions": [
+                {
+                  "type": "Markdown",
+                  "parameters": {
+                    "content": "SOCRadar alarms are pulled every few minutes by Microsoft Sentinel."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/dataConnectors",
+      "apiVersion": "2025-09-01",
+      "name": "[concat(parameters('WorkspaceName'), '/Microsoft.SecurityInsights/', variables('connectorName'))]",
+      "location": "[variables('location')]",
+      "kind": "RestApiPoller",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/providers/dataConnectorDefinitions', parameters('WorkspaceName'), 'Microsoft.SecurityInsights', variables('definitionName'))]",
+        "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName'))]"
+      ],
+      "properties": {
+        "connectorDefinitionName": "[variables('definitionName')]",
+        "dataType": "[variables('tableName')]",
+        "dcrConfig": {
+          "streamName": "Custom-SOCRadar_Alarms_CL",
+          "dataCollectionEndpoint": "[reference(resourceId('Microsoft.Insights/dataCollectionEndpoints', variables('dceName')), '2023-03-11').logsIngestion.endpoint]",
+          "dataCollectionRuleImmutableId": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName')), '2023-03-11').immutableId]"
+        },
+        "auth": {
+          "type": "APIKey",
+          "ApiKey": "[parameters('SocradarApiKey')]",
+          "ApiKeyName": "API-Key",
+          "ApiKeyIdentifier": ""
+        },
+        "request": {
+          "apiEndpoint": "[concat('https://platform.socradar.com/api/company/', parameters('CompanyId'), '/incidents/v4')]",
+          "httpMethod": "GET",
+          "queryWindowInMin": 5,
+          "queryTimeFormat": "UnixTimestamp",
+          "rateLimitQPS": 1,
+          "retryCount": 3,
+          "timeoutInSeconds": 60,
+          "headers": {
+            "Accept": "application/json",
+            "User-Agent": "SOCRadar-Azure-Sentinel-Incidents-Import (Sentinel CCF)"
+          },
+          "queryParameters": {
+            "limit": "[string(parameters('PageSize'))]",
+            "start_date": "{_QueryWindowStartTime}",
+            "end_date": "{_QueryWindowEndTime}"
+          }
+        },
+        "paging": {
+          "pagingType": "CountBasedPaging",
+          "pageNumberParaName": "page",
+          "pageSize": "[parameters('PageSize')]",
+          "zeroBasedIndexing": false
+        },
+        "response": {
+          "eventsJsonPaths": [
+            "$.data[*]"
+          ],
+          "format": "json"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2024-03-01",
+      "name": "[concat(parameters('WorkspaceName'), '/Microsoft.SecurityInsights/', variables('ruleId'))]",
+      "kind": "Scheduled",
+      "properties": {
+        "displayName": "SOCRadar alarm",
+        "description": "Raises one alert, and one incident, for every SOCRadar alarm the SOCRadar Alarms connector writes to SOCRadar_Alarms_CL.",
+        "severity": "Medium",
+        "enabled": true,
+        "query": "SOCRadar_Alarms_CL\n| where ingestion_time() > ago(10m)\n| where toupper(Status) == \"OPEN\"\n| where isnotempty(AlarmId)\n| summarize arg_max(TimeGenerated, *) by AlarmId\n| extend AlarmUrl = strcat(\"https://platform.socradar.com/company/\", CompanyId, \"/alarm/\", AlarmId)\n| extend SentinelSeverity = case(toupper(Severity) in (\"CRITICAL\", \"HIGH\"), \"High\", toupper(Severity) == \"MEDIUM\", \"Medium\", \"Low\")\n| extend AlarmDescription = strcat(substring(AlarmText, 0, 1500), \"\\n\\nSOCRadar severity: \", toupper(Severity))\n| project TimeGenerated, AlarmId, CompanyId, Title, AlarmText, AlarmDescription, AlarmMainType, AlarmSubType, Severity, Status, AlarmDate, AlarmUrl, SentinelSeverity\n| order by TimeGenerated asc\n| take 149",
+        "queryFrequency": "PT5M",
+        "queryPeriod": "PT30M",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT5M",
+        "suppressionEnabled": false,
+        "tactics": [],
+        "techniques": [],
+        "eventGroupingSettings": {
+          "aggregationKind": "AlertPerResult"
+        },
+        "alertDetailsOverride": {
+          "alertDisplayNameFormat": "[SOCRadar] #{{AlarmId}} - {{Title}}",
+          "alertDescriptionFormat": "{{AlarmDescription}}",
+          "alertSeverityColumnName": "SentinelSeverity"
+        },
+        "customDetails": {
+          "AlarmId": "AlarmId",
+          "AlarmMainType": "AlarmMainType",
+          "AlarmSubType": "AlarmSubType",
+          "SocradarSeverity": "Severity",
+          "AlarmStatus": "Status"
+        },
+        "entityMappings": [
+          {
+            "entityType": "URL",
+            "fieldMappings": [
+              {
+                "identifier": "Url",
+                "columnName": "AlarmUrl"
+              }
+            ]
+          }
+        ],
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "P7D",
+            "matchingMethod": "Selected",
+            "groupByEntities": [
+              "URL"
+            ],
+            "groupByAlertDetails": [],
+            "groupByCustomDetails": []
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/tables', parameters('WorkspaceName'), variables('tableName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/automationRules",
+      "apiVersion": "2024-03-01",
+      "name": "[concat(parameters('WorkspaceName'), '/Microsoft.SecurityInsights/', variables('automationRuleId'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/providers/alertRules', parameters('WorkspaceName'), 'Microsoft.SecurityInsights', variables('ruleId'))]"
+      ],
+      "properties": {
+        "displayName": "SOCRadar - label incidents created by the alert-backed rule",
+        "order": 1,
+        "triggeringLogic": {
+          "isEnabled": true,
+          "triggersOn": "Incidents",
+          "triggersWhen": "Created",
+          "conditions": [
+            {
+              "conditionType": "Property",
+              "conditionProperties": {
+                "propertyName": "IncidentRelatedAnalyticRuleIds",
+                "operator": "Contains",
+                "propertyValues": [
+                  "[resourceId('Microsoft.OperationalInsights/workspaces/providers/alertRules', parameters('WorkspaceName'), 'Microsoft.SecurityInsights', variables('ruleId'))]"
+                ]
+              }
+            }
+          ]
+        },
+        "actions": [
+          {
+            "order": 1,
+            "actionType": "ModifyProperties",
+            "actionConfiguration": {
+              "labels": [
+                {
+                  "labelName": "SOCRadar"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
