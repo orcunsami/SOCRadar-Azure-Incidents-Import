@@ -271,7 +271,7 @@ In `AlertBacked` mode the incidents carry only `SOCRadar`; an automation rule ca
 labels. The alarm id is on the incident's URL entity instead -- see [Incident mode](#incident-mode).
 
 The alarm id can be read from `SOCRadar-Alarm-<id>`, from the incident title, and last from the
-incident's URL entity (`.../alarm/<id>`), so alert-backed incidents, which carry no per-alarm
+incident's URL entity (`.../alarm-management?...&value=<id>`), so alert-backed incidents, which carry no per-alarm
 labels, still resolve it. The obvious field for this, `providerIncidentId`, cannot be used: Azure overwrites both it and `providerName` on
 any incident created through the API, silently and without an error.
 

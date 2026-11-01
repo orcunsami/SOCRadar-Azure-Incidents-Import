@@ -28,6 +28,7 @@ shape and never runs a workflow action.
 | `test_alert_backed_mode.py` | Alert-backed mode: rule limits, import cap and checkpoint |
 | `test_query_logic.py` | The volume-spike rule, the not-yet-closed query and the Alarm Overview query do what the README says |
 | `test_description_markdown.py` | The incident description is markdown-safe text plus a content table, capped after escaping |
+| `test_alarm_link_format.py` | The View in SOCRadar link is built in one live shape in the templates, the analytic rule and the KQL file |
 
 Run them all locally:
 
