@@ -41,11 +41,123 @@ def workflow(template, kind):
             return resource
 
 
+CATS = ["Phishing", "Credential", "DataLeak", "Vulnerability", "Other"]
+TARGET = [0]  # which of the five rules a rule-scoped mutation hits
+
+
 def rule(template):
     nested = next(r for r in template["resources"] if r.get("name") == "deploy-alert-backed-rule")
     inner = nested["properties"]["template"]["resources"]
-    return next(r for r in inner if r["type"].endswith("/alertRules")), \
+    return [r for r in inner if r["type"].endswith("/alertRules")][TARGET[0]], \
         next(r for r in inner if r["type"].endswith("/automationRules"))
+
+
+def all_rules(template):
+    nested = next(r for r in template["resources"] if r.get("name") == "deploy-alert-backed-rule")
+    return [r for r in nested["properties"]["template"]["resources"] if r["type"].endswith("/alertRules")]
+
+
+def m_classifier_drifts_in_one_rule(t):
+    r, _ = rule(t)
+    r["properties"]["query"] = r["properties"]["query"].replace('"Code Repository Data Leak", ', "", 1)
+
+
+def m_pair_dropped_everywhere(t):
+    for r in all_rules(t):
+        r["properties"]["query"] = r["properties"]["query"].replace('"PII Exposure", ', "", 1)
+
+
+def m_catch_all_new_guid(t):
+    t["variables"]["alertBackedRuleId"] = "[guid(variables('workspaceResourceId'), 'socradar-alert-backed-rule-2')]"
+
+
+def m_automation_omits_one_rule(t):
+    _, auto = rule(t)
+    values = auto["properties"]["triggeringLogic"]["conditions"][0]["conditionProperties"]["propertyValues"]
+    del values[-1]
+
+
+def m_credential_switch_ignored(t):
+    for r in all_rules(t):
+        if "Credential" in r["properties"]["query"].split("| where AlarmCategory == ")[1][:14]:
+            r["properties"]["enabled"] = True
+
+
+def m_dcr_drops_a_key(t):
+    for res in t["resources"]:
+        if res["type"] == "Microsoft.Insights/dataCollectionRules" and "AlarmsDcrName" in res["name"]:
+            for flow in res["properties"]["dataFlows"]:
+                flow["transformKql"] = flow["transformKql"].replace(", 'computer_name', AlarmPayload['content']['computer_name']", "")
+
+
+def m_title_uses_entity_column(t):
+    r, _ = rule(t)
+    r["properties"]["alertDetailsOverride"]["alertDisplayNameFormat"] = r["properties"]["alertDetailsOverride"]["alertDisplayNameFormat"].replace("SuspiciousDomainLabel", "SuspiciousDomain")
+
+
+def m_credential_copies_secret(t):
+    r, _ = rule(t)
+    r["properties"]["query"] = r["properties"]["query"].replace("| extend HasMachineInfo", "| extend ExposedUser = tostring(AlarmPayload['credential_details'])\n| extend HasMachineInfo")
+
+
+def m_origin_by_machine_word(t):
+    r, _ = rule(t)
+    r["properties"]["query"] = r["properties"]["query"].replace('case(Title has "Employee", "Employee",', 'case(Title has "Machine", "InfectedMachine", Title has "Employee", "Employee",')
+
+
+def m_leak_url_any(t):
+    r, _ = rule(t)
+    r["properties"]["query"] = r["properties"]["query"].replace(' and LeakUrl !has "socradar.com"', "")
+
+
+def m_query_too_long(t):
+    r, _ = rule(t)
+    r["properties"]["query"] += "\n// " + "x" * 3000
+
+
+def q_replace(old, new):
+    def mutate(t):
+        r, _ = rule(t)
+        r["properties"]["query"] = r["properties"]["query"].replace(old, new)
+    mutate.__doc__ = "rule(t): replace %r" % old[:40]
+    return mutate
+
+
+def m_domain_regex_no_dot(t):
+    r, _ = rule(t)
+    r["properties"]["query"] = r["properties"]["query"].replace('Phishing Domain:\\s*([^\\s,;]+\\.[^\\s,;]+)', 'Phishing Domain:\\s*([^\\s,;]+)')
+
+
+def samples(t):
+    nested = next(r for r in t["resources"] if r.get("name") == "deploy-alert-backed-rule")
+    return [r for r in nested["properties"]["template"]["resources"]
+            if r["type"].endswith("/automationRules") and "Sample" in r["name"]]
+
+
+def m_sample_unconditional(t):
+    for a in samples(t):
+        a.pop("condition", None)
+
+
+def m_sample_adds_socradar_label(t):
+    samples(t)[1]["properties"]["actions"][0]["actionConfiguration"]["labels"] = [{"labelName": "SOCRadar"}]
+
+
+def m_sample_phishing_severity(t):
+    samples(t)[0]["properties"]["actions"][0]["actionConfiguration"]["severity"] = "Low"
+
+
+def m_sample_phishing_any_rule(t):
+    conds = samples(t)[0]["properties"]["triggeringLogic"]["conditions"][0]["conditionProperties"]
+    conds["propertyValues"] = conds["propertyValues"] + [conds["propertyValues"][0].replace("alertBackedPhishingRuleId", "alertBackedRuleId")]
+
+
+def m_sample_key_changed(t):
+    samples(t)[1]["properties"]["triggeringLogic"]["conditions"][0]["conditionProperties"]["itemConditions"][0]["conditionProperties"]["propertyValues"] = ["AlarmId"]
+
+
+def m_samples_default_on(t):
+    t["parameters"]["DeploySampleAutomationRules"]["defaultValue"] = True
 
 
 def m_default_direct(t):
@@ -231,7 +343,7 @@ def m_monitored_asset_dropped(t):
 def m_domain_from_payload_only(t):
     r, _ = rule(t)
     q = r["properties"]["query"]
-    r["properties"]["query"] = q.replace('extract(@"Phishing Domain:\\s*([^\\s,;]+)", 1, AlarmText)', '""')
+    r["properties"]["query"] = q.replace('extract(@"Phishing Domain:\\s*([^\\s,;]+\\.[^\\s,;]+)", 1, AlarmText)', '""')
 
 
 def m_content_domain_from_payload(t):
@@ -241,10 +353,54 @@ def m_content_domain_from_payload(t):
 
 def m_domain_regex_greedy(t):
     r, _ = rule(t)
-    r["properties"]["query"] = r["properties"]["query"].replace('Phishing Domain:\\s*([^\\s,;]+)', 'Phishing Domain:\\s*(\\S+)')
+    r["properties"]["query"] = r["properties"]["query"].replace('Phishing Domain:\\s*([^\\s,;]+\\.[^\\s,;]+)', 'Phishing Domain:\\s*(\\S+)')
 
 
 MUTATIONS = [
+    ("severity column not projected", (ROOT, IMPORT), q_replace("SentinelSeverity, AlarmCategory", "AlarmCategory")),
+    ("time column not projected", (ROOT, IMPORT), q_replace("| project TimeGenerated, AlarmId", "| project AlarmId")),
+    ("company id not projected", (ROOT, IMPORT), q_replace("AlarmId, CompanyId, Title", "AlarmId, Title")),
+    ("alarm date not projected", (ROOT, IMPORT), q_replace("Status, AlarmDate, AlarmUrl", "Status, AlarmUrl")),
+    ("alarm text not projected", (ROOT, IMPORT), q_replace("Title, AlarmText, AlarmDescription", "Title, AlarmDescription")),
+    ("phishing domain fallback lost", (ROOT, IMPORT), q_replace("coalesce(extract(@\"Phishing Domain:", "strcat(extract(@\"Phishing Domain:")),
+    ("CVE priority swapped", (ROOT, IMPORT), q_replace("CveId = coalesce(tostring(AlarmPayload['cve_id']),", "CveId = strcat(tostring(AlarmPayload['cve_id']),")),
+    ("CVE in the alarm text not read", (ROOT, IMPORT), q_replace("extract(@\"(CVE-[0-9]{4}-[0-9]{4,})\", 1, AlarmText)", "''")),
+    ("affected domain keeps its case", (ROOT, IMPORT), q_replace("AffectedDomain = tolower(", "AffectedDomain = (")),
+    ("device country keeps the blank placeholder", (ROOT, IMPORT), q_replace("DeviceCountry = trim(@\"[\\s\\-]+\", ", "DeviceCountry = (")),
+    ("credential origin default renamed", (ROOT, IMPORT), q_replace('"Historical", "Other")', '"Historical", "Zother")')),
+    ("sample automation rules always deploy", (ROOT, IMPORT), m_sample_unconditional),
+    ("custom-detail sample adds the SOCRadar label", (ROOT, IMPORT), m_sample_adds_socradar_label),
+    ("phishing sample lowers severity", (ROOT, IMPORT), m_sample_phishing_severity),
+    ("phishing sample matches the catch-all too", (ROOT, IMPORT), m_sample_phishing_any_rule),
+    ("custom-detail sample keys on another detail", (ROOT, IMPORT), m_sample_key_changed),
+    ("samples default to on", (ROOT, IMPORT), m_samples_default_on),
+    ("phishing domain regex accepts a word with no dot", (ROOT, IMPORT), m_domain_regex_no_dot),
+    ("CVE regex wants 9 digits", (ROOT, IMPORT), q_replace("CVE-[0-9]{4}-[0-9]{4,}", "CVE-[0-9]{4}-[0-9]{9,}")),
+    ("scanned asset reads only the ip key", (ROOT, IMPORT), q_replace("(?:ip|host)", "(?:ip)")),
+    ("IPv4 regex takes three octets", (ROOT, IMPORT), q_replace("(?:\\.[0-9]{1,3}){3}", "(?:\\.[0-9]{1,3}){2}")),
+    ("CVSS regex drops decimals", (ROOT, IMPORT), q_replace('"value":([0-9.]+)', '"value":([0-9]+)')),
+    ("blank trim keeps the hyphen placeholder", (ROOT, IMPORT), q_replace('@"[\\s\\-]+"', '@"[\\s]+"')),
+    ("machine info needs both machine and IP", (ROOT, IMPORT), q_replace("isnotempty(MachineName) or isnotempty(DeviceIp)", "isnotempty(MachineName) and isnotempty(DeviceIp)")),
+    ("trailing dot is not trimmed from the domain", (ROOT, IMPORT), q_replace('trim_end(@"[.,;]+", ', "(")),
+    ("matched assets dumped as JSON", (ROOT, IMPORT), q_replace('iff(gettype(AlarmPayload[\'matched_asset\']) == "array", strcat_array(AlarmPayload[\'matched_asset\'], ", "), tostring(AlarmPayload[\'matched_asset\']))', "tostring(AlarmPayload['matched_asset'])")),
+    ("PII channel renamed", (ROOT, IMPORT), q_replace('"PII Exposure", "PII"', '"PII Exposure", "Other"')),
+    ("leak link prefers the repository link", (ROOT, IMPORT), q_replace("coalesce(tostring(AlarmPayload['content_link']), tostring(AlarmPayload['source_link']), tostring(AlarmPayload['repository_url']))", "coalesce(tostring(AlarmPayload['repository_url']), tostring(AlarmPayload['content_link']), tostring(AlarmPayload['source_link']))")),
+    ("affected domain wants a 9 letter TLD", (ROOT, IMPORT), q_replace("[A-Za-z]{2,})", "[A-Za-z]{9,})")),
+    ("free text cap is 1200", (ROOT, IMPORT), q_replace(", 0, 120)", ", 0, 1200)")),
+    ("title label column not projected", (ROOT, IMPORT), q_replace("SuspiciousDomain, SuspiciousDomainLabel,", "SuspiciousDomain,")),
+    ("IoC IP column not projected", (ROOT, IMPORT), q_replace("| project TimeGenerated, AlarmId, CompanyId, Title, AlarmText, AlarmDescription,", "| project TimeGenerated, AlarmId, CompanyId, Title, AlarmText,")),
+    ("description column not projected", (ROOT, IMPORT), q_replace("AlarmText, AlarmDescription, AlarmMainType", "AlarmText, AlarmMainType")),
+    ("classifier drifts in one rule", (ROOT, IMPORT), m_classifier_drifts_in_one_rule),
+    ("a pair is dropped from every typed list", (ROOT, IMPORT), m_pair_dropped_everywhere),
+    ("catch-all gets a new rule id", (ROOT, IMPORT), m_catch_all_new_guid),
+    ("automation rule omits one rule id", (ROOT, IMPORT), m_automation_omits_one_rule),
+    ("credential switch is ignored", (ROOT, IMPORT), m_credential_switch_ignored),
+    ("DCR drops a payload key a rule reads", (ROOT,), m_dcr_drops_a_key),
+    ("title placeholder is the entity column", (ROOT, IMPORT), m_title_uses_entity_column),
+    ("credential rule copies the exposed credential", (ROOT, IMPORT), m_credential_copies_secret),
+    ("credential origin keys on the word Machine", (ROOT, IMPORT), m_origin_by_machine_word),
+    ("leak entity may be a SOCRadar link", (ROOT, IMPORT), m_leak_url_any),
+    ("query exceeds the platform limit", (ROOT, IMPORT), m_query_too_long),
     ("IncidentMode defaults to Direct again", (ROOT, IMPORT), m_default_direct),
     ("rule windows on TimeGenerated", (ROOT, IMPORT), m_timegenerated_window),
     ("closed alarms become incidents", (ROOT, IMPORT), m_closed_alarms_alert),
@@ -283,35 +439,52 @@ MUTATIONS = [
 
 
 def main():
+    import inspect
     blind = []
+    total = 0
     for name, paths, mutate in MUTATIONS:
-        originals = {p: open(p, encoding="utf-8").read() for p in paths}
-        try:
-            for p in paths:
-                template = json.loads(originals[p])
-                mutate(template)
-                with open(p, "w", encoding="utf-8") as handle:
-                    handle.write(json.dumps(template, indent=4, ensure_ascii=False))
+        scoped = "rule(t)" in inspect.getsource(mutate)
+        bit = 0
+        for index in (range(len(CATS)) if scoped else [0]):
+            TARGET[0] = index
+            label = "%s [%s]" % (name, CATS[index]) if scoped else name
+            originals = {p: open(p, encoding="utf-8").read() for p in paths}
             try:
-                result = subprocess.run([sys.executable, TEST], cwd=REPO, capture_output=True, text=True,
-                                        timeout=60, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
-                # A crash also exits 1; only the test's own verdict line counts as a catch.
-                rc = result.returncode if "CHECK FAILED" in result.stdout or result.returncode == 0 else 125
-            except subprocess.TimeoutExpired:
-                rc = 124
-        finally:
-            for p, text in originals.items():
-                with open(p, "w", encoding="utf-8") as handle:
-                    handle.write(text)
-        if rc == 0:
-            print("BLIND  %-34s test still passed" % name)
-            blind.append(name)
-        elif rc == 125:
-            print("CRASH  %-34s the test crashed instead of failing" % name)
-            blind.append(name)
-        else:
-            print("caught %-34s" % name)
-    print("\nblind: %d of %d" % (len(blind), len(MUTATIONS)))
+                changed = False
+                for p in paths:
+                    template = json.loads(originals[p])
+                    before = json.dumps(template, sort_keys=True)
+                    mutate(template)
+                    changed = changed or json.dumps(template, sort_keys=True) != before
+                    with open(p, "w", encoding="utf-8") as handle:
+                        handle.write(json.dumps(template, indent=4, ensure_ascii=False))
+                if not changed:
+                    continue  # the mutation has nothing to bite on in this rule
+                total += 1
+                bit += 1
+                try:
+                    result = subprocess.run([sys.executable, TEST], cwd=REPO, capture_output=True, text=True,
+                                            timeout=60, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+                    # A crash also exits 1; only the test's own verdict line counts as a catch.
+                    rc = result.returncode if "CHECK FAILED" in result.stdout or result.returncode == 0 else 125
+                except subprocess.TimeoutExpired:
+                    rc = 124
+            finally:
+                for p, text in originals.items():
+                    with open(p, "w", encoding="utf-8") as handle:
+                        handle.write(text)
+            if rc == 0:
+                print("BLIND  %-52s test still passed" % label)
+                blind.append(label)
+            elif rc == 125:
+                print("CRASH  %-52s the test crashed instead of failing" % label)
+                blind.append(label + " (crash)")
+            else:
+                print("caught %-52s" % label)
+        if bit == 0:
+            print("STALE  %-52s the mutation changes nothing: its target text is gone" % name)
+            blind.append(name + " (stale)")
+    print("\nblind: %d of %d" % (len(blind), total))
     return 1 if blind else 0
 
 

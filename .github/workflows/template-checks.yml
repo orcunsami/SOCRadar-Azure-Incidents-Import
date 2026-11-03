@@ -99,6 +99,9 @@ jobs:
       - name: The SOCRadar link has one live shape everywhere
         run: python3 tests/test_alarm_link_format.py
 
+      - name: Workbook renders and its joins are guarded
+        run: python3 tests/test_workbook.py
+
       - name: No secrets in tracked files
         run: |
           set -e

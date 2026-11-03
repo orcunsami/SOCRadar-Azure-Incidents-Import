@@ -45,7 +45,7 @@ ALLOWED = {
         ('removed', "resources > [Microsoft.Authorization/roleAssignments|[guid(variables('workspaceResourceId'), variables('SyncPlaybookName'), variables('sentinelRoleDefinitionId'))]]",
          'the Sync identity needs no role'),
         ('changed', "resources > [Microsoft.Insights/workbooks|[guid(resourceGroup().id, 'SOCRadar-Workbook')]] > properties > serializedData",
-         'the dashboard header no longer mentions sync status'),
+         'the dashboard header no longer mentions sync status, and its sync-status panels are left out (there is no Sync to report on)'),
         ('changed', "resources > [Microsoft.Logic/workflows|[variables('ImportPlaybookName')]] > properties > definition > actions > Pagination_Loop > actions > For_Each_Alarm > actions > Check_If_Should_Import > actions > Check_If_Already_Exists > else > actions > Check_If_Open_Status > else > actions > Build_Labels > inputs",
          'a closed alarm is imported without the Synced label, which only told Sync to leave it alone'),
         ('removed', "resources > [Microsoft.Logic/workflows|[variables('SyncPlaybookName')]]",
@@ -81,7 +81,7 @@ ALLOWED = {
     ],
     'Playbooks/SOCRadar-Workbook/azuredeploy.json': [
         ('changed', "resources > [Microsoft.Insights/workbooks|[guid(resourceGroup().id, variables('WorkbookName'))]] > properties > serializedData",
-         'the dashboard header no longer mentions sync status'),
+         'the dashboard header no longer mentions sync status, and its sync-status panels are left out (there is no Sync to report on)'),
     ],
 }
 
