@@ -17,6 +17,8 @@ shape and never runs a workflow action.
 | `test_checkpoint.py` | The import window comes from the storage checkpoint, not from incident titles: the account's name and security properties, the role assignment's scope, the GET/PUT headers Table Storage requires, and that the checkpoint is written only after a complete read |
 | `../tools/check_commit_hygiene.sh` | Before pushing: fails when a commit message in `master..HEAD` carries a company id, a workspace or resource group name, an alarm id or a tool signature. Runs in CI too; `--msg-file` makes it a `commit-msg` hook |
 | `test_daily_rescan.py` | The shipped lookback expression, evaluated at fixed clock times: once a day after 09:00 UTC it reaches back 5 days, otherwise the gap since the last run, never past 7 days; no parameter exposes it; every SOCRadar call sends a User-Agent |
+| `test_lookback_bounds.py` | `InitialLookbackMinutes` is bounded 10 to 10080 in the combined template and the standalone import playbook, the default sits inside, and 10080 is the clamp in `Determine_Lookback` |
+| `mutate_lookback_bounds.py` | Moves each bound and the clamp in both template copies (6 mutations); the bounds test must fail each one |
 | `test_no_writeback.py` | The deployable template carries one Logic App, every call to SOCRadar is a GET, and no write-back string is left in any template |
 | `../tools/check_parent_subset.py` | Every template is the parent repo's template at `PARENT_SHA` minus the documented differences, so a hand edit or a stale copy shows up |
 | `test_management_base_url.py` | No template hardcodes the public-cloud ARM host |

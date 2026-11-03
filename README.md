@@ -319,8 +319,9 @@ from scratch.
 `IncidentMode` decides who creates the incident. The default is `AlertBacked`.
 
 **`Direct`** is what the sections above describe: the import Logic App creates one incident per
-alarm through the Microsoft Sentinel API. Those incidents never appear in the Microsoft Defender
-portal's unified queue, which only lists incidents backed by an alert.
+alarm through the Microsoft Sentinel API. Those incidents do not appear in the Microsoft Defender
+portal's unified queue, which only lists incidents backed by an alert (per Microsoft documentation; measured on
+this product only for `AlertBacked`).
 
 **`AlertBacked`** (default) makes the import write each alarm to `SOCRadar_Alarms_CL` and nothing else. A
 set of five scheduled analytics rules (every 10 minutes, deployed with this mode) raises one
