@@ -48,9 +48,13 @@ def rule(template):
         next(r for r in inner if r["type"].endswith("/automationRules"))
 
 
+def m_default_direct(t):
+    t["parameters"]["IncidentMode"]["defaultValue"] = "Direct"
+
+
 def m_timegenerated_window(t):
     r, _ = rule(t)
-    r["properties"]["query"] = r["properties"]["query"].replace("ingestion_time() > ago(10m)", "TimeGenerated > ago(10m)")
+    r["properties"]["query"] = r["properties"]["query"].replace("ingestion_time() > ago(1d)", "TimeGenerated > ago(1d)")
 
 
 def m_closed_alarms_alert(t):
@@ -64,8 +68,13 @@ def m_take_150(t):
 
 
 def m_group_by_nothing(t):
+    # Grouping moved from the URL entity to the AlarmId custom detail (task_azure_0098:
+    # once IoC URL entities exist, two unrelated alarms could share one and wrongly merge).
+    # Mutate by reverting to the old, now-wrong state.
     r, _ = rule(t)
-    r["properties"]["incidentConfiguration"]["groupingConfiguration"]["groupByEntities"] = []
+    gc = r["properties"]["incidentConfiguration"]["groupingConfiguration"]
+    gc["groupByEntities"] = ["URL"]
+    gc["groupByCustomDetails"] = []
 
 
 def m_reopen_closed(t):
@@ -129,7 +138,114 @@ def m_rule_marker_renamed(t):
     r["properties"]["query"] = r["properties"]["query"].replace("SOCRadar severity: ", "Severity: ")
 
 
+
+
+
+
+
+
+
+
+def m_entity_mapping_dropped(t):
+    r, _ = rule(t)
+    r["properties"]["entityMappings"] = r["properties"]["entityMappings"][:-1]
+
+
+def m_ioc_enrichment_hard_fail(t):
+    actions = workflow(t, "import")["properties"]["definition"]["actions"]
+    find(actions, "Parse_AlertBacked_IoC_Arrays")["runAfter"] = {"Run_AlertBacked_IoC_Regex_Query": ["Succeeded"]}
+
+
+def m_ioc_column_wrong_index(t):
+    actions = workflow(t, "import")["properties"]["definition"]["actions"]
+    find(actions, "Ingest_Alarm_Row")["inputs"]["body"][0]["IoCIp1"] = (
+        "@{coalesce(outputs('Parse_AlertBacked_IoC_Arrays')?['ips']?[1], '')}")
+
+
+def m_description_pipe_table(t):
+    r, _ = rule(t)
+    q = r["properties"]["query"]
+    r["properties"]["query"] = q.replace('strcat("Content:\\n\\n", strcat_array(array_slice(ContentRows, 0, 5), "\\n\\n"))',
+                                         'strcat("Content:\\n\\n| Field | Value |\\n|---|---|\\n", strcat_array(ContentRows, "\\n"))')
+
+
+def m_description_link_glued(t):
+    r, _ = rule(t)
+    r["properties"]["query"] = r["properties"]["query"].replace('strcat("\\n\\nView in SOCRadar: "', 'strcat("View in SOCRadar: "')
+
+
+def m_no_alert_dedup(t):
+    r, _ = rule(t)
+    r["properties"]["query"] = r["properties"]["query"].replace("| join kind=leftanti Alerted on $left.AlarmId == $right.AlertedAlarmId\n", "")
+
+
+def m_dedup_flat_custom_details(t):
+    r, _ = rule(t)
+    r["properties"]["query"] = r["properties"]["query"].replace(
+        "tostring(parse_json(tostring(parse_json(tostring(ExtendedProperties))['Custom Details'])).AlarmId[0])",
+        "tostring(parse_json(tostring(ExtendedProperties)).AlarmId)")
+
+
+def m_no_holdback(t):
+    r, _ = rule(t)
+    r["properties"]["query"] = r["properties"]["query"].replace("| where ingestion_time() < ago(12m)\n", "")
+
+
+def m_five_minute_runs(t):
+    r, _ = rule(t)
+    r["properties"]["queryFrequency"] = "PT5M"
+
+
+def m_description_html_escape(t):
+    r, _ = rule(t)
+    q = r["properties"]["query"]
+    r["properties"]["query"] = q.replace('| extend DetailsMarkdown = trim(@"\\s", replace_string(replace_string(substring(AlarmText, 0, 1500), "\\r", ""), "\\n", " "))',
+                                         '| extend DetailsMarkdown = trim(@"\\s", replace_string(replace_string(replace_string(replace_string(substring(AlarmText, 0, 1500), "\\r", ""), "\\n", " "), "<", "&lt;"), "*", "\\\\*"))')
+
+
+def m_dns_from_regex_domain(t):
+    r, _ = rule(t)
+    for mapping in r["properties"]["entityMappings"]:
+        for fm in mapping["fieldMappings"]:
+            if fm["columnName"] == "SuspiciousDomain":
+                fm["columnName"] = "IoCDomain1"
+
+
+def m_content_uncapped(t):
+    r, _ = rule(t)
+    r["properties"]["query"] = r["properties"]["query"].replace("array_slice(ContentRows, 0, 5)", "ContentRows")
+
+
+def m_phishing_domain_not_ingested(t):
+    for res in t["resources"]:
+        if res["type"] == "Microsoft.Insights/dataCollectionRules" and "AlarmsDcrName" in res["name"]:
+            for flow in res["properties"]["dataFlows"]:
+                flow["transformKql"] = flow["transformKql"].replace(", 'phishing_domain', AlarmPayload['content']['phishing_domain']", "")
+
+
+def m_monitored_asset_dropped(t):
+    r, _ = rule(t)
+    r["properties"]["customDetails"].pop("MonitoredAsset", None)
+
+
+def m_domain_from_payload_only(t):
+    r, _ = rule(t)
+    q = r["properties"]["query"]
+    r["properties"]["query"] = q.replace('extract(@"Phishing Domain:\\s*([^\\s,;]+)", 1, AlarmText)', '""')
+
+
+def m_content_domain_from_payload(t):
+    r, _ = rule(t)
+    r["properties"]["query"] = r["properties"]["query"].replace("pack('Suspicious Domain', SuspiciousDomain,", "pack('Suspicious Domain', AlarmPayload['phishing_domain'],")
+
+
+def m_domain_regex_greedy(t):
+    r, _ = rule(t)
+    r["properties"]["query"] = r["properties"]["query"].replace('Phishing Domain:\\s*([^\\s,;]+)', 'Phishing Domain:\\s*(\\S+)')
+
+
 MUTATIONS = [
+    ("IncidentMode defaults to Direct again", (ROOT, IMPORT), m_default_direct),
     ("rule windows on TimeGenerated", (ROOT, IMPORT), m_timegenerated_window),
     ("closed alarms become incidents", (ROOT, IMPORT), m_closed_alarms_alert),
     ("rule takes 150 rows", (ROOT, IMPORT), m_take_150),
@@ -146,6 +262,23 @@ MUTATIONS = [
     ("rule deployed in Direct mode", (ROOT, IMPORT), m_rule_deployment_unconditional),
     ("rule description drops the marker", (ROOT, IMPORT), m_rule_description_plain),
     ("rule marker text renamed", (ROOT, IMPORT), m_rule_marker_renamed),
+    ("entity mapping dropped", (ROOT, IMPORT), m_entity_mapping_dropped),
+    ("IoC enrichment hard-fails ingest", (ROOT, IMPORT), m_ioc_enrichment_hard_fail),
+    ("description goes back to a pipe table", (ROOT, IMPORT), m_description_pipe_table),
+    ("link glued to severity line", (ROOT, IMPORT), m_description_link_glued),
+    ("rule alerts an alarm twice", (ROOT, IMPORT), m_no_alert_dedup),
+    ("rows are not held back before alerting", (ROOT, IMPORT), m_no_holdback),
+    ("description escapes markdown again", (ROOT, IMPORT), m_description_html_escape),
+    ("DNS entity is the regex-found domain again", (ROOT, IMPORT), m_dns_from_regex_domain),
+    ("Content block lists every field", (ROOT, IMPORT), m_content_uncapped),
+    ("Content domain read from the payload key", (ROOT, IMPORT), m_content_domain_from_payload),
+    ("domain no longer read from the alarm text", (ROOT, IMPORT), m_domain_from_payload_only),
+    ("phishing domain regex takes a comma list whole", (ROOT, IMPORT), m_domain_regex_greedy),
+    ("phishing domain not ingested", (ROOT,), m_phishing_domain_not_ingested),
+    ("monitored asset dropped from custom details", (ROOT, IMPORT), m_monitored_asset_dropped),
+    ("rule runs every 5 minutes again", (ROOT, IMPORT), m_five_minute_runs),
+    ("alerted-AlarmId read uses the flat shape", (ROOT, IMPORT), m_dedup_flat_custom_details),
+    ("IoC column reads wrong index", (ROOT, IMPORT), m_ioc_column_wrong_index),
 ]
 
 

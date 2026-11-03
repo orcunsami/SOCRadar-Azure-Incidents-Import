@@ -110,8 +110,8 @@ Microsoft Sentinel was not found on the workspace '<name>'
 This used to succeed. The deployment went green and the integration was dead, because a
 workspace can carry the Microsoft Sentinel solution and still have no onboarding state.
 
-The same step rejects `IncidentMode=AlertBacked` cross-RG, during template validation, before
-anything is created:
+`AlertBacked` is the default, so a cross-RG deployment has to set `IncidentMode=Direct`. Without
+it, the same step rejects the deployment during template validation, before anything is created:
 
 ```
 The provided value for the template parameter 'IncidentMode' is not valid.
@@ -134,7 +134,7 @@ exist. Deploy into the workspace's own resource group to use alert-backed mode.
 | `PollingIntervalMinutes` | `5` | How often to check for alarms (1-60). Also sets the floor of the import window |
 | `InitialLookbackMinutes` | `600` | Lookback window when there is no checkpoint yet (10 hours) |
 | `ImportAllStatuses` | `false` | `true` imports RESOLVED / FALSE_POSITIVE / MITIGATED too, as already-closed incidents -- see [Importing closed alarms](#importing-closed-alarms) |
-| `IncidentMode` | `Direct` | `Direct` creates the incidents from the import Logic App. `AlertBacked` writes the alarms to `SOCRadar_Alarms_CL` and a scheduled analytics rule raises one alert and one incident per alarm, which is what makes them show up in the Microsoft Defender portal -- see [Incident mode](#incident-mode) |
+| `IncidentMode` | `AlertBacked` | `AlertBacked` writes the alarms to `SOCRadar_Alarms_CL` and a scheduled analytics rule raises one alert and one incident per alarm, which is what makes them show up in the Microsoft Defender portal. `Direct` creates the incidents from the import Logic App; they never reach the Defender portal, and it is the only value that works when the workspace is in another resource group -- see [Incident mode](#incident-mode) |
 | `EnableIoCEnrichment` | `true` | Attach IP/domain/URL indicators from the alarm to the incident as entities (see [IoC Entity Enrichment](#ioc-entity-enrichment)) |
 | `EnableAuditLogging` | `true` | Writes audit events to `SOCRadarAuditLog_CL` |
 | `EnableAlarmsTable` | `true` | Stores alarm fields in `SOCRadar_Alarms_CL`. The workbook and four of the five hunting queries need it. Forced on by `IncidentMode=AlertBacked` |
@@ -142,6 +142,11 @@ exist. Deploy into the workspace's own resource group to use alert-backed mode.
 | `TableRetentionDays` | `365` | Retention for custom tables (30-730) |
 
 ## Existing installations
+
+**`IncidentMode` now defaults to `AlertBacked`.** Redeploying an install that ran `Direct` without
+setting the parameter switches it: the import window is read once more and every alarm in it gets
+a second, rule-created incident. To keep the previous behaviour, pass `IncidentMode=Direct`
+explicitly. See [Incident mode](#incident-mode).
 
 Deployments made before `DeployNewWorkspace` existed stated a pricing tier on the workspace
 resource, and a template overwrites every field it states. If the target workspace was on a
@@ -302,16 +307,35 @@ from scratch.
 
 ## Incident mode
 
-`IncidentMode` decides who creates the incident.
+`IncidentMode` decides who creates the incident. The default is `AlertBacked`.
 
-**`Direct`** (default) is what the sections above describe: the import Logic App creates one
-incident per alarm through the Microsoft Sentinel API. Those incidents never appear in the
-Microsoft Defender portal's unified queue, which only lists incidents backed by an alert.
+**`Direct`** is what the sections above describe: the import Logic App creates one incident per
+alarm through the Microsoft Sentinel API. Those incidents never appear in the Microsoft Defender
+portal's unified queue, which only lists incidents backed by an alert.
 
-**`AlertBacked`** makes the import write each alarm to `SOCRadar_Alarms_CL` and nothing else. A
-scheduled analytics rule (`SOCRadar alarm`, every 5 minutes, deployed with this mode) raises one
+**`AlertBacked`** (default) makes the import write each alarm to `SOCRadar_Alarms_CL` and nothing else. A
+scheduled analytics rule (`SOCRadar alarm`, every 10 minutes, deployed with this mode) raises one
 alert per row, and Microsoft Sentinel -- or Microsoft Defender XDR, when the workspace is
 onboarded to it -- creates the incident. An automation rule adds the `SOCRadar` label so they are recognisable as SOCRadar's.
+
+### Microsoft Defender portal
+
+Microsoft ends the Microsoft Sentinel experience in the Azure portal on 31 March 2027; after
+that date workspaces are managed only in the Microsoft Defender portal. A workspace opened in
+the Defender portal lists incidents backed by an alert. Incidents created through the API or by a
+Logic App do not reach it, and after that date they have no portal to be seen in.
+
+| | `AlertBacked` | `Direct` |
+|---|---|---|
+| Incident in the Defender queue | yes (provider shown as Microsoft XDR) | no |
+| Incident in the Azure portal | yes | yes, until 31 March 2027 |
+| Entities (alarm link, IP, phishing domain, URL) | on the alert, filled when the incident is created | bookmark based, Azure portal only |
+| Custom details (`AlarmId`, `AlarmMainType`, `AlarmSubType`, `SocradarSeverity`, `AlarmStatus`, `SuspiciousDomain`, `MonitoredAsset`) | on the alert, usable in automation rules | none |
+| Incident delay after the alarm is imported | about 20 minutes (the rule waits 12 minutes) | within the polling interval |
+| Description | plain text (Defender shows it raw) | markdown |
+
+Measured on a workspace connected to Defender: an incident closed in the Defender portal reached
+Sentinel in about 6 seconds. Defender may rename an incident when its correlation merges alerts.
 
 What is different in `AlertBacked`:
 
@@ -325,24 +349,53 @@ What is different in `AlertBacked`:
   over the following runs instead of landing in one rule run. The reason is a documented
   platform limit: a rule run with more than 50 customised values drops every customised title
   and severity for that run (a 58-row run kept them in our test, so read the cap as a guard,
-  not as the edge). The rule keeps a 10-minute ingestion window, so the cap keeps a run under
-  that. A run that still exceeds the limit gets the rule's default name and Medium severity;
+  not as the edge). The rule runs every 10 minutes over rows that are at least 12 minutes old, so the cap keeps
+  the rows that become eligible in one run under that. A run that still exceeds the limit gets the rule's default name and Medium severity;
   the alarm id is on the incident's URL entity either way.
 - Each alarm is written once and the incident is Microsoft Sentinel's to create. If the platform
   skips a rule run (seen once on a fresh test workspace, for about 25 minutes: alerts written, no
   incidents), those alarms are not re-alerted and never get an incident. `Direct` has no such
   dependency.
 - Incident title `[SOCRadar] #<id> - <title>`; severity mapped as in Direct mode (CRITICAL/HIGH ->
-  High, MEDIUM -> Medium, everything else -> Low); label `SOCRadar` only. The description is the
-  alarm text followed by a `SOCRadar severity: <LEVEL>` line, which is where the SOCRadar
-  level lives because these incidents carry no `SOCRadar-Severity-*` label.
-- Every alarm row is seen by two consecutive rule runs: the 10-minute window overlaps the
-  5-minute interval on purpose, because a late run must not skip rows and a skipped row is never
-  retried. The second alert joins the same incident, so an incident normally shows 2 alerts. An
-  incident closed inside those 10 minutes comes back once as a new incident; close it again.
-- Verified against a workspace that is not connected to Microsoft Defender XDR. On a connected
-  workspace Defender names the incident: the alarm is still found through the URL entity, but
-  the severity line may be absent.
+  High, MEDIUM -> Medium, everything else -> Low); label `SOCRadar` only. The description is a
+  report of plain "Field: value" lines (alarm id/type/severity/status/date, the alarm text, and
+  a Content block of up to 5 "Field: value" lines of at most 160 characters -- suspicious
+  domain, compromised IPs/domains, malware family/path, asset, tags), budgeted to stay inside the alert description's byte limit; it has no table and no markdown escaping
+  because the Defender portal shows the description as raw text. It ends with a `SOCRadar severity: <LEVEL>`
+  line, then the link to the alarm.
+- The import extracts the first IPv4, domain and URL indicator from the alarm text and content
+  (the same regex technique Direct mode uses for its bookmark enrichment) and writes them to the row. The
+  rule maps the IP and the URL from them (a SOCRadar platform link is dropped, it is not an
+  indicator). The domain is different: the first regex domain is alphabetical and on lookalike
+  alarms it is often a name server, so the DNS entity is the phishing domain instead
+  (`SuspiciousDomain`, read from the `Phishing Domain:` line of the alarm text, falling back to
+  the `phishing_domain` payload key; empty for alarm types that have none). The customer's own
+  brand (`alarm_asset`) is never an entity; it is the `MonitoredAsset` custom detail, next to
+  `SuspiciousDomain`, so an automation rule can branch on them. An `AlertBacked` incident's
+  Entities tab is populated the same run the incident is created. Together with `AlarmUrl` that
+  is 4 entity mappings; a live deploy measured the rule's real platform ceiling at 5 (not the 10
+  originally assumed), so this is one indicator per type, not three. This extraction always runs in `AlertBacked` mode and
+  does not check `EnableIoCEnrichment` -- that parameter only gates Direct mode's bookmark-based
+  enrichment (which needs the elevated Contributor role); the alert-backed path maps entities
+  through the rule itself and needs no such elevation, only one extra Log Analytics query per
+  alarm. Incident grouping keys off the `AlarmId` custom detail rather than an entity, so two
+  different alarms that happen to share an IoC indicator do not merge into one incident.
+- One alert per alarm, best effort. The platform runs a rule's query about 6 minutes behind the
+  clock, so the rule runs every 10 minutes, only considers a row once it is 12 minutes old, and
+  drops alarms that already have an alert (it reads `SecurityAlert` for the `AlarmId` custom
+  detail). In the live test a closed incident was not followed by a second one for the same
+  alarm. If the previous alert is ever not visible yet, the duplicate alert joins the same
+  incident (grouping is by `AlarmId`). The cost is delay: in the live test an incident showed up
+  about 20 minutes after the import (the 12 to 25 minute range is an estimate), not 3 to 11. An
+  alarm stays eligible for a day after it is written; if the rule does not run for longer than
+  that, the alarm never gets an alert.
+- Upgrading an `AlertBacked` install from an older version: the rule is updated in place and
+  skips alarms whose earlier alert carries the `AlarmId` custom detail. An alarm the old rule
+  alerted moments before the redeploy may still be alerted once more, and if its first incident
+  was already closed that opens a second one. Not measured; close it.
+- Measured on a workspace connected to Microsoft Defender XDR: the incident kept the
+  `[SOCRadar] #<id>` title and the description. Defender can rename an incident when its
+  correlation merges alerts; the alarm id is on the URL entity either way.
 - Closed alarms never become incidents here. With `ImportAllStatuses=true` they still land in
   the table, but the rule only fires on `OPEN`.
 - The IoC entity enrichment reaches these incidents on the next import run, through the same
@@ -443,6 +496,10 @@ az deployment group create -g <resource-group> \
 
 `tools/check_template_drift.py` compares these standalone templates against `azuredeploy.json`
 on every push and PR so they cannot silently fall behind.
+
+Before pushing, run `tools/check_commit_hygiene.sh`: it fails when a commit message in
+`master..HEAD` carries a company id, a workspace or resource group name, an alarm id or an AI
+signature. It can also run as a `commit-msg` hook (`--msg-file`).
 
 ## Hunting Queries
 

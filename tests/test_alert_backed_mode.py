@@ -106,7 +106,7 @@ for path, template in ((ROOT, root), (IMPORT, import_pb)):
     param = template["parameters"].get("IncidentMode")
     check(param is not None, f"{label}: no IncidentMode parameter")
     if param:
-        check(param.get("defaultValue") == "Direct", f"{label}: IncidentMode must default to Direct")
+        check(param.get("defaultValue") == "AlertBacked", f"{label}: IncidentMode must default to AlertBacked")
         check(param.get("allowedValues") == ["Direct", "AlertBacked"],
               f"{label}: IncidentMode allowedValues must be exactly Direct, AlertBacked")
     gate = template.get("variables", {}).get("alarmsTableEnabled", "")
@@ -173,12 +173,15 @@ if root_nested:
         query = props["query"]
         check(rule.get("kind") == "Scheduled", "rule kind must be Scheduled")
         check(props.get("enabled") is True, "rule must be enabled")
-        check(props.get("queryFrequency") == "PT5M", "rule must run every 5 minutes (platform minimum)")
-        check(props.get("queryPeriod") == "PT30M",
-              "rule period must be PT30M: TimeGenerated is the ingest call time and a new table's "
-              "first ingestion can lag 15 minutes (EXP-AZURE-0177)")
-        check("ingestion_time() > ago(10m)" in query,
-              "rule query must window on ingestion_time(), not TimeGenerated (ingestion-delay guidance)")
+        check(props.get("queryFrequency") == "PT10M",
+              "rule must run every 10 minutes: the platform runs a query ~6 min behind the clock, so a shorter "
+              "interval hides the previous alert from the next run and every alarm alerts twice (measured)")
+        check(props.get("queryPeriod") == "P1D",
+              "rule period must be P1D: the SecurityAlert read that drops already-alerted alarms and the "
+              "backlog both need the day, and TimeGenerated is the ingest call time (EXP-AZURE-0177)")
+        check("ingestion_time() > ago(1d)" in query and "ingestion_time() < ago(12m)" in query,
+              "rule query must window on ingestion_time(), not TimeGenerated, and hold rows back 12 minutes "
+              "so the previous run's alert is visible before the row is considered again")
         check(not re.search(r"TimeGenerated\s*[<>]=?\s*ago\(", query),
               "rule query must not filter TimeGenerated with ago(): the engine injects that window")
         check('toupper(Status) == "OPEN"' in query,
@@ -207,12 +210,45 @@ if root_nested:
         # incident has no label channel for it in this mode.
         check(override.get("alertDescriptionFormat") == "{{AlarmDescription}}",
               "alert description must be the composed AlarmDescription column")
-        extend = re.search(r"\| extend AlarmDescription = ([^\n]+)", query)
-        check(extend is not None and "substring(AlarmText, 0, 1500)" in extend.group(1)
-              and f'"\\n\\n{SEVERITY_MARK}"' in extend.group(1) and "toupper(Severity)" in extend.group(1),
-              "AlarmDescription must be substring(AlarmText, 0, 1500) + newline + 'SOCRadar severity: ' + toupper(Severity)")
-        check(extend is not None and query.index("| extend AlarmDescription") < query.index("| project "),
+        # The description is a markdown report (SOCRadar Alarm header, details, content table,
+        # byte-budgeted link) rather than a flat substring; the two invariants Sync and the
+        # 4800-byte budget actually depend on are that AlarmText still feeds it and the
+        # severity marker still closes it.
+        body_extend = re.search(r"\| extend DescriptionBody = ([^\n]+)", query)
+        check("substring(AlarmText, 0, 1500)" in query,
+              "AlarmDescription must still derive from substring(AlarmText, 0, 1500)")
+        check(body_extend is not None and f'"\\n\\n{SEVERITY_MARK}"' in body_extend.group(1)
+              and body_extend.group(1).rstrip().endswith('toupper(Severity))'),
+              "DescriptionBody must end with the newline + 'SOCRadar severity: ' + toupper(Severity) marker")
+        # The Defender portal shows the description as raw text (measured 2 Nov 2026): a pipe
+        # table appears as "| Field | Value |" rows, and a link glued to the severity line
+        # reads "HIGHView in SOCRadar". So content is "Field: value" lines and the link is
+        # separated by a blank line.
+        check("| Field | Value |" not in query and "|---|" not in query,
+              "content must be plain 'Field: value' lines, not a pipe table (Defender does not render markdown)")
+        check('strcat("\\n\\nView in SOCRadar: ", AlarmUrl)' in query,
+              "the SOCRadar link must start after a blank line, not glue onto the severity marker")
+        # Defender shows the description as raw text, so markdown escapes would be read literally
+        # ("\\_admin\\_", "&lt;", "\\|"). The alert description is plain text on purpose.
+        check("&lt;" not in query and "&gt;" not in query and "SafeValue" not in query,
+              "description must not HTML-escape: Defender shows the text raw")
+        check(not any(f'"{c}", "\\\\{c}"' in query for c in "*_~[]|"),
+              "description must not backslash-escape markdown characters: Defender shows them raw")
+        check('"`", "\'\'"' not in query, "description must not rewrite backticks: it is not markdown")
+        # One alert per alarm. Two overlapping runs see every row and the platform can delay a run
+        # (measured: 5 alerts per alarm, and a new incident 85 s after an analyst closed the first),
+        # so rows whose AlarmId already has a SecurityAlert are dropped before they can alert again.
+        check("join kind=leftanti Alerted on $left.AlarmId == $right.AlertedAlarmId" in query
+              and query.index("join kind=leftanti Alerted") < query.index("summarize arg_max(TimeGenerated, *) by AlarmId"),
+              "rule must drop alarms that already have an alert before it summarizes")
+        check("tostring(parse_json(tostring(parse_json(tostring(ExtendedProperties))['Custom Details'])).AlarmId[0])" in query,
+              "the alerted-AlarmId read must use the double-encoded Custom Details shape measured live")
+        check("union isfuzzy=true (datatable(ExtendedProperties:string)[]), SecurityAlert" in query,
+              "the SecurityAlert read must tolerate a workspace where that table does not exist yet")
+        check("extend AlarmDescription = " in query and query.index("| extend DescriptionBody") < query.index("| project "),
               "AlarmDescription must be derived before the projection")
+        check("base64_encode_tostring(" in query and "4800" in query and "4900" in query,
+              "AlarmDescription must stay inside the 4800/4900-byte alert-description budget")
         for level, mapped in (("CRITICAL", "High"), ("HIGH", "High"), ("MEDIUM", "Medium")):
             check(f'"{level}"' in query and f'"{mapped}"' in query,
                   f"severity mapping {level}->{mapped} missing from the rule query")
@@ -225,18 +261,75 @@ if root_nested:
         check(details.get("AlarmId") == "AlarmId", "AlarmId must be a custom detail")
 
         mappings = props.get("entityMappings", [])
-        url = [m for m in mappings if m.get("entityType") == "URL"]
-        check(len(url) == 1 and url[0]["fieldMappings"] == [{"identifier": "Url", "columnName": "AlarmUrl"}],
-              "the alarm URL must be mapped as the URL entity: it is the identity that survives the 50-value cliff")
+        # AlarmUrl stays first: it is the one entity every alarm always has, used to be the
+        # grouping key before IoC entities existed. One IoC entity per type (the first IP/
+        # domain/URL the Logic App regex-extracted from the alarm, same technique Direct mode
+        # uses for bookmark enrichment) rides alongside it. A live deploy measured the real
+        # platform cap at 5 (not the 10 originally assumed from general entityMappings docs --
+        # "Invalid length of '10' for 'EntityMappings'. ... should be between '1' and '5'"),
+        # so this stays at 4 of 5 on purpose, not 3-per-type.
+        check(mappings and mappings[0] == {"entityType": "URL", "fieldMappings": [{"identifier": "Url", "columnName": "AlarmUrl"}]},
+              "AlarmUrl must still be the first URL entity mapping")
+        check(len(mappings) == 4, f"entityMappings must total 4 (real platform cap is 5, measured via live deploy): found {len(mappings)}")
+        # The DNS entity is the phishing domain the alarm names (content.phishing_domain), not the
+        # first domain the import regex finds in the text: on a lookalike-domain alarm that was a
+        # registrar name server, and on others it can be the customer's own domain. The monitored
+        # asset (the customer's own brand) is a custom detail and never an entity.
+        ioc_cols = {"IoCIp1": ("IP", "Address"), "SuspiciousDomain": ("DNS", "DomainName"), "IoCUrl1": ("URL", "Url")}
+        by_col = {m["fieldMappings"][0]["columnName"]: (m["entityType"], m["fieldMappings"][0]["identifier"])
+                  for m in mappings[1:]}
+        for col, expected in ioc_cols.items():
+            check(by_col.get(col) == expected,
+                  f"entityMappings must map {col} as a single-identifier {expected[0]} entity")
+        check("IoCDomain1" not in by_col and "MonitoredAsset" not in by_col,
+              "the regex-found domain and the monitored asset must not be entities")
+        check(details.get("SuspiciousDomain") == "SuspiciousDomain" and details.get("MonitoredAsset") == "MonitoredAsset",
+              "SuspiciousDomain and MonitoredAsset must be custom details so an automation rule can branch on them")
+        check('extract(@"Phishing Domain:\\s*([^\\s,;]+)", 1, AlarmText)' in query
+              and "tostring(AlarmPayload['phishing_domain'])" in query and "SuspiciousDomain = tolower(" in query
+              and "MonitoredAsset = tostring(AlarmPayload['alarm_asset'])" in query,
+              "SuspiciousDomain must come from the 'Phishing Domain:' line of the alarm text (payload key as fallback) "
+              "and MonitoredAsset from alarm_asset")
+        # The extraction regex must take only the first token: "Phishing Domain: foo.com,bar.com"
+        # used to become one invalid DNS value. Run the very regex the rule carries.
+        m_dom = re.search(r'extract\(@"(Phishing Domain:[^"]+)", 1, AlarmText\)', query)
+        check(m_dom is not None, "could not find the Phishing Domain extraction in the rule query")
+        if m_dom:
+            dom_re = m_dom.group(1)
+            for text, want in (("Phishing Domain: foo.com,bar.com Score: 80", "foo.com"),
+                               ("Phishing Domain: a.example;b.example x", "a.example"),
+                               ("Phishing Domain: evil-example.com Score: 1", "evil-example.com"),
+                               ("Phishing Domain: evil-example.com. Score: 1", "evil-example.com.")):
+                hit = re.search(dom_re, text)
+                check(hit is not None and hit.group(1) == want,
+                      f"Phishing Domain regex on {text!r} gave {hit.group(1) if hit else None!r}, want {want!r}")
+        check('IoCUrl1 = iff(IoCUrl1 has "socradar.com", "", IoCUrl1)' in query,
+              "a SOCRadar platform link must not become an IoC URL entity")
+        check("pack('Suspicious Domain', SuspiciousDomain," in query,
+              "the Content block must show the extracted phishing domain first, not depend on the payload key")
+        check("array_slice(ContentRows, 0, 5)" in query,
+              "the Content block must stop at the first 5 fields, not list every field the alarm carries")
+        infra_text = open(os.path.join(REPO, "Playbooks", "SOCRadar-Alarms-Infrastructure", "azuredeploy.json")).read()
+        check("'phishing_domain', AlarmPayload['content']['phishing_domain']" in infra_text,
+              "infrastructure template: the alarms DCR transform must keep content.phishing_domain")
+        for dcr_owner, label in ((root, "root template"),):
+            for r in dcr_owner["resources"]:
+                if r["type"] == "Microsoft.Insights/dataCollectionRules" and "AlarmsDcrName" in r["name"]:
+                    kql = json.dumps(r["properties"]["dataFlows"])
+                    check("phishing_domain" in kql, f"{label}: the alarms DCR transform must keep content.phishing_domain, or the rule has nothing to read")
         check('strcat("https://platform.socradar.com/app/company/", CompanyId, '
               '"/alarm-management?tab=approved&field=alarmId&operator=equals&value=", AlarmId)' in query,
               "AlarmUrl must open the alarm in the platform (field=alarmId ... value=<id>)")
 
         grouping = props.get("incidentConfiguration", {}).get("groupingConfiguration", {})
         check(props.get("incidentConfiguration", {}).get("createIncident") is True, "rule must create incidents")
+        # Grouping moved off the URL entity once IoC URL entities were added: two different
+        # alarms that happen to share one IoC URL must not merge into one incident. AlarmId
+        # is already a unique custom detail per alarm, so group on that instead.
         check(grouping.get("enabled") is True and grouping.get("matchingMethod") == "Selected"
-              and grouping.get("groupByEntities") == ["URL"],
-              "alerts must group into one incident by the URL entity (duplicate alerts of one alarm)")
+              and grouping.get("groupByEntities") == [] and grouping.get("groupByCustomDetails") == ["AlarmId"],
+              "alerts must group into one incident by the AlarmId custom detail (duplicate alerts of one alarm, "
+              "without merging unrelated alarms that share an IoC entity)")
         check(grouping.get("lookbackDuration") == "P7D", "grouping lookback must be the 7-day platform maximum")
         check(grouping.get("reopenClosedIncident") is False, "a duplicate alert must never reopen a closed incident")
 
@@ -248,7 +341,7 @@ if root_nested:
         declared = set()
         for stream in dcr["properties"]["streamDeclarations"].values():
             declared |= {c["name"] for c in stream["columns"]}
-        derived = {"AlarmUrl", "SentinelSeverity", "AlarmDescription"}
+        derived = {"AlarmUrl", "SentinelSeverity", "AlarmDescription", "SuspiciousDomain", "MonitoredAsset"}
         missing = columns - declared - derived
         check(not missing, f"rule query projects columns the alarms table does not have: {sorted(missing)}")
         check(set(details.values()) <= columns, "every custom detail must be a projected column")
@@ -335,11 +428,34 @@ for path, template in ((ROOT, root), (IMPORT, import_pb)):
         _, is_new = by_name(actions, "Check_Alarm_Is_New")
         check(is_new and "404" in json.dumps(is_new["expression"]), f"{label}: Check_Alarm_Is_New must test for 404")
 
+        IOC_COLUMNS = ["IoCIp1", "IoCDomain1", "IoCUrl1"]
         _, ingest = by_name(actions, "Ingest_Alarm_Row")
         _, direct_ingest = by_name(actions, "Ingest_To_Custom_Table")
-        check(ingest and ingest["inputs"]["method"] == "POST"
-              and list(ingest["inputs"]["body"][0].keys()) == list(direct_ingest["inputs"]["body"][0].keys()),
-              f"{label}: Ingest_Alarm_Row must write the same columns as the Direct-mode ingest")
+        ingest_cols = list(ingest["inputs"]["body"][0].keys()) if ingest else []
+        direct_cols = list(direct_ingest["inputs"]["body"][0].keys()) if direct_ingest else []
+        # AlertBacked writes every Direct-mode column plus the first IP/domain/URL IoC (its own
+        # entity mappings, since the alert-backed path cannot run Direct's bookmark-based
+        # enrichment). One per type, not three: a live deploy measured the real entityMappings
+        # cap at 5, so only 4 of 5 are spent here (AlarmUrl + these 3).
+        check(ingest and ingest["inputs"]["method"] == "POST" and direct_cols
+              and all(c in ingest_cols for c in direct_cols)
+              and [c for c in ingest_cols if c not in direct_cols] == IOC_COLUMNS,
+              f"{label}: Ingest_Alarm_Row must write every Direct-mode column plus exactly the 3 IoC columns")
+        for i, col in enumerate(("ips", "domains", "urls")):
+            name = IOC_COLUMNS[i]
+            check(ingest and ingest["inputs"]["body"][0].get(name)
+                  == f"@{{coalesce(outputs('Parse_AlertBacked_IoC_Arrays')?['{col}']?[0], '')}}",
+                  f"{label}: {name} must read Parse_AlertBacked_IoC_Arrays['{col}'][0], defaulting to ''")
+        _, parse = by_name(actions, "Parse_AlertBacked_IoC_Arrays")
+        check(parse and ingest and ingest["runAfter"] == {"Parse_AlertBacked_IoC_Arrays": ["Succeeded"]},
+              f"{label}: Ingest_Alarm_Row must run after Parse_AlertBacked_IoC_Arrays")
+        _, run_regex = by_name(actions, "Run_AlertBacked_IoC_Regex_Query")
+        check(parse and run_regex and set(parse["runAfter"].get("Run_AlertBacked_IoC_Regex_Query", []))
+              == {"Succeeded", "Failed", "TimedOut"},
+              f"{label}: Parse_AlertBacked_IoC_Arrays must run regardless of the regex call's outcome "
+              "(enrichment failures must never block ingestion)")
+        check(run_regex and "retryPolicy" in run_regex["inputs"],
+              f"{label}: Run_AlertBacked_IoC_Regex_Query must declare its retryPolicy inside inputs")
         check(ingest and f"items('{LOOP}')" in json.dumps(ingest["inputs"]) and "items('For_Each_Alarm')" not in json.dumps(ingest["inputs"]),
               f"{label}: Ingest_Alarm_Row must read its own loop item")
         _, write = by_name(actions, "Write_Seen_Marker")

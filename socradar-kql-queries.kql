@@ -38,6 +38,20 @@ SOCRadar_Alarms_CL
     | where TimeGenerated > ago(7d)
     | where Title contains "[SOCRadar]"
     | extend AlarmId = extract(@"#(\d+)", 1, Title)
+    // Fallback for AlertBacked incidents Defender renamed: the AlarmId custom detail
+    // on the incident's one backing alert, same pattern as SOCRadarUnsyncedClosedIncident.
+    | extend AlertGuid = tostring(todynamic(AlertIds)[0])
+    | join kind=leftouter (
+        SecurityAlert
+        | summarize arg_max(TimeGenerated, *) by SystemAlertId
+        // Custom details land in ExtendedProperties['Custom Details'] as a second,
+        // still-encoded JSON string, values are 1-element arrays (live-measured, 2 Nov 2026).
+        | extend AlarmIdFromAlert = tostring(parse_json(tostring(parse_json(tostring(ExtendedProperties))['Custom Details'])).AlarmId[0])
+    ) on $left.AlertGuid == $right.SystemAlertId
+    | extend AlarmId = coalesce(AlarmId, AlarmIdFromAlert)
+    // Drop the SecurityAlert columns the inner join brought in, or the outer join
+    // renames the incident Status to Status2 and Status1 becomes the alert status.
+    | project AlarmId, Title, Status, IncidentNumber, CreatedTime
 ) on $left.AlarmId == $right.AlarmId
 | project
     AlarmId,
@@ -58,6 +72,15 @@ SOCRadar_Alarms_CL
     | where TimeGenerated > ago(24h)
     | where Title contains "[SOCRadar]"
     | extend AlarmId = extract(@"#(\d+)", 1, Title)
+    | extend AlertGuid = tostring(todynamic(AlertIds)[0])
+    | join kind=leftouter (
+        SecurityAlert
+        | summarize arg_max(TimeGenerated, *) by SystemAlertId
+        // Custom details land in ExtendedProperties['Custom Details'] as a second,
+        // still-encoded JSON string, values are 1-element arrays (live-measured, 2 Nov 2026).
+        | extend AlarmIdFromAlert = tostring(parse_json(tostring(parse_json(tostring(ExtendedProperties))['Custom Details'])).AlarmId[0])
+    ) on $left.AlertGuid == $right.SystemAlertId
+    | extend AlarmId = coalesce(AlarmId, AlarmIdFromAlert)
 ) on AlarmId
 | project TimeGenerated, AlarmId, Title, Severity
 
@@ -166,6 +189,17 @@ SOCRadar_Alarms_CL
     SecurityIncident
     | summarize arg_max(TimeGenerated, *) by IncidentNumber
     | extend AlarmId = extract(@"#(\d+)", 1, Title)
+    | extend AlertGuid = tostring(todynamic(AlertIds)[0])
+    | join kind=leftouter (
+        SecurityAlert
+        | summarize arg_max(TimeGenerated, *) by SystemAlertId
+        // Custom details land in ExtendedProperties['Custom Details'] as a second,
+        // still-encoded JSON string, values are 1-element arrays (live-measured, 2 Nov 2026).
+        | extend AlarmIdFromAlert = tostring(parse_json(tostring(parse_json(tostring(ExtendedProperties))['Custom Details'])).AlarmId[0])
+    ) on $left.AlertGuid == $right.SystemAlertId
+    | extend AlarmId = coalesce(AlarmId, AlarmIdFromAlert)
+    // Same reason as the incident correlation query above: keep Status1 the incident status.
+    | project AlarmId, Status
 ) on AlarmId
 | where isempty(Status1) or Status1 != "Closed"
 | project
