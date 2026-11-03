@@ -28,14 +28,6 @@ RAW = "https://raw.githubusercontent.com/orcunsami/SOCRadar-Azure-Incidents/{ref
 # file -> [(kind, path prefix, why)]. Paths read "resources[type|name] > properties > ...".
 ALLOWED = {
     'azuredeploy.json': [
-        ('changed', "resources > [Microsoft.Logic/workflows|[variables('ImportPlaybookName')]] > properties > definition > actions > Pagination_Loop > actions > For_Each_Alarm > actions > Check_If_Should_Import > expression",
-         'in Direct mode no alarm is imported while the list of existing incidents was cut short, because the de-duplication would be blind and the longer window would then import twice'),
-        ('added', "resources > [Microsoft.Logic/workflows|[variables('ImportPlaybookName')]] > properties > definition > actions > Pagination_Loop > actions > Get_SOCRadar_Page > inputs > headers > User-Agent",
-         'every call to SOCRadar names this integration in the User-Agent, so SOCRadar can tell it apart in its logs'),
-        ('added', "resources > [Microsoft.Logic/workflows|[variables('ImportPlaybookName')]] > properties > definition > actions > Backfill_Missing_Entities > actions > For_Each_Missing_Entity > actions > Fetch_Backfill_Alarm > inputs > headers > User-Agent",
-         'every call to SOCRadar names this integration in the User-Agent, so SOCRadar can tell it apart in its logs'),
-        ('changed', "resources > [Microsoft.Logic/workflows|[variables('ImportPlaybookName')]] > properties > definition > actions > Determine_Lookback > inputs",
-         'once a day, after 09:00 UTC, the window reaches back five days (a late-arriving alarm is picked up; the de-duplication keeps it from doubling)'),
         ('changed', 'metadata > description',
          'the description no longer promises a write-back'),
         ('removed', 'outputs > syncLogicAppName',
@@ -64,14 +56,6 @@ ALLOWED = {
          'the name of a Logic App that is gone'),
     ],
     'Playbooks/SOCRadar-Alarm-Import/azuredeploy.json': [
-        ('changed', "resources > [Microsoft.Logic/workflows|[parameters('PlaybookName')]] > properties > definition > actions > Pagination_Loop > actions > For_Each_Alarm > actions > Check_If_Should_Import > expression",
-         'in Direct mode no alarm is imported while the list of existing incidents was cut short, because the de-duplication would be blind and the longer window would then import twice'),
-        ('added', "resources > [Microsoft.Logic/workflows|[parameters('PlaybookName')]] > properties > definition > actions > Pagination_Loop > actions > Get_SOCRadar_Page > inputs > headers > User-Agent",
-         'every call to SOCRadar names this integration in the User-Agent, so SOCRadar can tell it apart in its logs'),
-        ('added', "resources > [Microsoft.Logic/workflows|[parameters('PlaybookName')]] > properties > definition > actions > Backfill_Missing_Entities > actions > For_Each_Missing_Entity > actions > Fetch_Backfill_Alarm > inputs > headers > User-Agent",
-         'every call to SOCRadar names this integration in the User-Agent, so SOCRadar can tell it apart in its logs'),
-        ('changed', "resources > [Microsoft.Logic/workflows|[parameters('PlaybookName')]] > properties > definition > actions > Determine_Lookback > inputs",
-         'once a day, after 09:00 UTC, the window reaches back five days (a late-arriving alarm is picked up; the de-duplication keeps it from doubling)'),
         ('changed', "resources > [Microsoft.Logic/workflows|[parameters('PlaybookName')]] > properties > definition > actions > Pagination_Loop > actions > For_Each_Alarm > actions > Check_If_Should_Import > actions > Check_If_Already_Exists > else > actions > Check_If_Open_Status > else > actions > Build_Labels > inputs",
          'a closed alarm is imported without the Synced label, which only told Sync to leave it alone'),
     ],

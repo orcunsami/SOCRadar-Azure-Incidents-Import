@@ -132,13 +132,14 @@ exist. Deploy into the workspace's own resource group to use alert-backed mode.
 | `DeployNewWorkspace` | `false` | `false` requires the workspace to exist and fails on a misspelled name before anything is created. `true` creates `WorkspaceName` when it does not exist yet; an existing workspace of that name is left as it is: the workspace resource states no settings, and a live check found tags, pricing tier, retention, daily cap and feature flags unchanged after redeploying. Ignored when `WorkspaceResourceGroup` is not the deployment RG. With `true`, an existing workspace in a region other than `WorkspaceLocation` fails with `InvalidResourceLocation` and nothing is created -- set `WorkspaceLocation` to its region. |
 | `SentinelRoleLevel` | `Responder` | `Responder` (least-privilege) or `Contributor`. Applies to the Logic App's identity while `EnableIoCEnrichment` is `false`; with it `true` the identity gets Contributor so it can add entities |
 | `PollingIntervalMinutes` | `5` | How often to check for alarms (1-60). Also sets the floor of the import window |
-| `InitialLookbackMinutes` | `600` | Lookback window when there is no checkpoint yet (10 hours) |
+| `InitialLookbackMinutes` | `600` | Lookback window when there is no checkpoint yet (10 hours). 10 to 10080 |
 | `ImportAllStatuses` | `false` | `true` imports RESOLVED / FALSE_POSITIVE / MITIGATED too, as already-closed incidents -- see [Importing closed alarms](#importing-closed-alarms) |
 | `IncidentMode` | `AlertBacked` | `AlertBacked` writes the alarms to `SOCRadar_Alarms_CL` and a scheduled analytics rule raises one alert and one incident per alarm, which is what makes them show up in the Microsoft Defender portal. `Direct` creates the incidents from the import Logic App; they never reach the Defender portal, and it is the only value that works when the workspace is in another resource group -- see [Incident mode](#incident-mode) |
 | `EnableIoCEnrichment` | `true` | Attach IP/domain/URL indicators from the alarm to the incident as entities (see [IoC Entity Enrichment](#ioc-entity-enrichment)) |
 | `EnableAuditLogging` | `true` | Writes audit events to `SOCRadarAuditLog_CL` |
 | `EnableCredentialRule` | `true` | `AlertBacked` only. `false` switches off the rule that raises an incident for every credential and botnet alarm; those alarms get no incident from any rule -- see [The five rules](#the-five-rules) |
-| `EnableAlarmsTable` | `true` | Stores alarm fields in `SOCRadar_Alarms_CL`. The workbook and four of the five hunting queries need it. Forced on by `IncidentMode=AlertBacked` |
+| `DeploySampleAutomationRules` | `false` | `AlertBacked` only. `true` adds two example automation rules to copy from -- see [Sample automation rules](#sample-automation-rules) |
+| `EnableAlarmsTable` | `true` | Stores alarm fields in `SOCRadar_Alarms_CL`. The workbook and three of the five hunting queries need it. Forced on by `IncidentMode=AlertBacked` |
 | `EnableWorkbook` | `true` | Deploys the SOCRadar Dashboard workbook. Needs `EnableAlarmsTable=true` -- with the table off, the workbook is skipped even when this is `true` |
 | `TableRetentionDays` | `365` | Retention for custom tables (30-730) |
 
@@ -272,7 +273,7 @@ version read them, so they are a contract, not decoration.
 | Label | Example | Purpose |
 |---|---|---|
 | `SOCRadar` | `SOCRadar` | Marks the incident as ours |
-| `SOCRadar-Alarm-<id>` | `SOCRadar-Alarm-104658646` | The machine-readable alarm id |
+| `SOCRadar-Alarm-<id>` | `SOCRadar-Alarm-<alarm id>` | The machine-readable alarm id |
 | alarm main type | `Domain` | From `alarm_type_details.alarm_main_type` |
 | alarm sub type | `Impersonating Domain` | From `alarm_type_details.alarm_sub_type`, when the alarm has one |
 | `SOCRadar-Severity-<LEVEL>` | `SOCRadar-Severity-CRITICAL` | The SOCRadar severity as SOCRadar reports it, including CRITICAL, which Microsoft Sentinel has no level for |
@@ -391,11 +392,11 @@ Logic App do not reach it, and after that date they have no portal to be seen in
 | Incident in the Azure portal | yes | yes, until 31 March 2027 |
 | Entities (alarm link, IP, phishing domain, URL) | on the alert, filled when the incident is created | bookmark based, Azure portal only |
 | Custom details (`AlarmId`, `AlarmMainType`, `AlarmSubType`, `SocradarSeverity`, `AlarmStatus`, `SuspiciousDomain`, `MonitoredAsset`) | on the alert, usable in automation rules | none |
-| Incident delay after the alarm is imported | about 20 minutes (the rule waits 12 minutes) | within the polling interval |
+| Incident delay after the alarm is imported | typically 20 to 30 minutes, measured 19 to 28 (the rule waits 12 minutes) | within the polling interval |
 | Description | plain text (Defender shows it raw) | markdown |
 
-Measured on a workspace connected to Defender: an incident closed in the Defender portal reached
-Sentinel in about 6 seconds. Defender may rename an incident when its correlation merges alerts.
+Measured on a workspace connected to Defender: an incident closed in the Defender portal
+reached Microsoft Sentinel in about 6 seconds. Defender may rename an incident when its correlation merges alerts.
 
 What is different in `AlertBacked`:
 
@@ -447,7 +448,7 @@ What is different in `AlertBacked`:
   detail). In the live test a closed incident was not followed by a second one for the same
   alarm. If the previous alert is ever not visible yet, the duplicate alert joins the same
   incident (grouping is by `AlarmId`). The cost is delay: in the live test an incident showed up
-  about 20 minutes after the import (the 12 to 25 minute range is an estimate; 26 minutes was measured on an upgraded install), not 3 to 11. An
+  20 to 30 minutes after the import (measured 19 to 28), not 3 to 11. An
   alarm stays eligible for a day after it is written; if the rule does not run for longer than
   that, the alarm never gets an alert.
 - Upgrading a single-rule `AlertBacked` install to the five rules: the old rule keeps its id and
@@ -471,9 +472,17 @@ What is different in `AlertBacked`:
 - `PollingIntervalMinutes` below 5 lowers the per-run cap (4 at 1 minute) rather than the
   rule interval, which cannot go below 5.
 
-Switching an existing install from `Direct` to `AlertBacked` re-ingests the current import
-window once, and every alarm in it gets a second, rule-created incident; close the old ones.
-Switching back does the same in reverse.
+Switching an existing install from `Direct` to `AlertBacked` re-ingests the alarms in the import
+window once (the window starts at the last checkpoint, at least 60 minutes back; the `alarm-<id>`
+rows that de-duplicate `AlertBacked` do not exist yet), and every alarm in it gets a second,
+rule-created incident; close the old ones.
+
+Switching back to `Direct` (redeploy in place with `IncidentMode=Direct`) switches the five rules
+and the labeling automation rule off; they stay deployed, because an incremental deployment never
+removes a resource. Measured on a live redeploy: all five rules `enabled=false` and the
+automation rule `isEnabled=false`. Incidents the rules had already raised stay. The rules are
+redeployed only where the alarms table exists: a `Direct` redeploy with `EnableAlarmsTable=false`
+leaves them as they were, so switch them off in the portal.
 
 ## Importing closed alarms
 
@@ -564,10 +573,6 @@ az deployment group create -g <resource-group> \
 
 `tools/check_template_drift.py` compares these standalone templates against `azuredeploy.json`
 on every push and PR so they cannot silently fall behind.
-
-Before pushing, run `tools/check_commit_hygiene.sh`: it fails when a commit message in
-`master..HEAD` carries a company id, a workspace or resource group name, an alarm id or an AI
-signature. It can also run as a `commit-msg` hook (`--msg-file`).
 
 ## Hunting Queries
 
