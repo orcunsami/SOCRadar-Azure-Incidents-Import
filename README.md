@@ -171,8 +171,12 @@ retention and `sku.lastSkuUpdate` came back untouched after redeploying.
 Upgrading also resets the import window once. The checkpoint lives in a storage account named
 after the resource group and workspace, so an upgrade in place reuses the same account and keeps
 the checkpoint; a deployment into a *different* resource group starts with an empty one and the
-first run falls back to `InitialLookbackMinutes`. Either way the de-duplication snapshot stops
-that from re-importing anything.
+first run falls back to `InitialLookbackMinutes`. Measured on an in-place upgrade from the
+`Direct` template: the first run read the 60 minute floor and ingested nothing. Alarms that
+`Direct` imported earlier have no `alarm-<id>` row, so the de-duplication does not recognise
+them: the first wider window that covers one (see the daily rescan under
+[Import window and de-duplication](#import-window-and-de-duplication)) ingests it again and the rule
+opens a second incident. Close the old one.
 
 ## Moving to the full version
 
@@ -291,6 +295,9 @@ with the time the run *started*:
   `InitialLookbackMinutes` (600).
 - Otherwise the gap since the last successful run, plus 15 minutes of overlap, with a floor of
   `max(PollingIntervalMinutes x 6, 60)` minutes and a ceiling of 7 days.
+- The first run at or after 09:00 UTC each day, when the last run was before 09:00 UTC, reads at
+  least the last 5 days (7200 minutes) once. Nothing exposes it as a parameter. Measured: a checkpoint
+  rewound 3 days gave a 7200 minute window, not 4335.
 - The row is written only after the run has read every page. A run that dies halfway leaves the
   window where it was, so nothing is skipped.
 - On a fresh deployment the first write can fail while the role assignment propagates. That is
@@ -440,7 +447,7 @@ What is different in `AlertBacked`:
   detail). In the live test a closed incident was not followed by a second one for the same
   alarm. If the previous alert is ever not visible yet, the duplicate alert joins the same
   incident (grouping is by `AlarmId`). The cost is delay: in the live test an incident showed up
-  about 20 minutes after the import (the 12 to 25 minute range is an estimate), not 3 to 11. An
+  about 20 minutes after the import (the 12 to 25 minute range is an estimate; 26 minutes was measured on an upgraded install), not 3 to 11. An
   alarm stays eligible for a day after it is written; if the rule does not run for longer than
   that, the alarm never gets an alert.
 - Upgrading a single-rule `AlertBacked` install to the five rules: the old rule keeps its id and
